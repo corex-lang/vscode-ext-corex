@@ -72,8 +72,8 @@ import {
   isRecord,
   isStr,
   isValidUri,
-  LSP_REQUEST_CANCELLED,
-  LSP_SERVER_CANCELLED,
+  LSP_REQUEST_CANCELED,
+  LSP_SERVER_CANCELED,
   notifyTextDocument,
   runCorexFmtCli,
   startLspClient,
@@ -695,11 +695,11 @@ async function requestLsp<R>(
     return mapFn(await client.request(method, params, token));
   } catch (error: unknown) {
     if (!token.isCancellationRequested) {
-      if (errMode === 1 && isJsonRpcRequestError(error) && error.code === LSP_SERVER_CANCELLED) {
+      if (errMode === 1 && isJsonRpcRequestError(error) && error.code === LSP_SERVER_CANCELED) {
         throw new Error('Busy', { cause: error });
       } else if (
         errMode === 2 &&
-        (!isJsonRpcRequestError(error) || error.code !== LSP_REQUEST_CANCELLED)
+        (!isJsonRpcRequestError(error) || error.code !== LSP_REQUEST_CANCELED)
       ) {
         throw error;
       }

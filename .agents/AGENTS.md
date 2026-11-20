@@ -49,11 +49,12 @@ Fix every error, warning, and lint diagnostic until the output is completely cle
 ## 5. Ask, Don't Assume
 
 -   **Ask First:** If you encounter ambiguous requirements, UX trade-offs, TextMate scope ambiguities, or LSP protocol edge cases, **ask the user first**. Never guess or make silent assumptions.
--   **No Redundant Surfaces:** If multiple configuration settings, commands, or helper APIs could express the same behavior, ask the user for their preference before adding, altering, or removing public manifest entries.
+-   **One Canonical Way (No Redundant Surfaces):** Every feature, configuration setting, command, or internal helper must have **one canonical way** to express it – never add duplicate settings, alias commands, or overlapping helper APIs. If multiple options arise, ask the user for their preference before adding, altering, or removing anything.
 
 ## 6. UI, CLI & Typography Aesthetics
 
 -   **Strict Ban on Colored Emojis (CRITICAL):** Never use colored emojis (such as `U+1F680`, `U+274C`, `U+2705`, `U+26A0 U+FE0F`) anywhere in extension UI strings, status-bar items, output-channel logs, test titles, source comments, commit messages, or Markdown documentation. Use built-in VS Code Codicons (`$(check)`, `$(error)`, `$(warning)`, `$(sync~spin)`) in editor UI surfaces and clean monochrome Unicode glyphs (`╭`, `│`, `╰`, `├`, `─`, `▸`, `•`, `✓`, `✗`, `⚠`) in logs, tests, and documentation.
+-   **American English (`en-US`):** Use American English spelling across all internal identifiers, UI/log strings, JSDoc, comments, tests, and documentation (e.g., `canceled`, `canceling`, `color`, `behavior`, `gray`; note that `cancellation` retains double `l` in American English, and external `vscode` / OS / protocol symbols such as `isCancellationRequested` keep their upstream spelling).
 -   **Typography & Punctuation:**
     -   Always use the single Unicode ellipsis character `…` (`U+2026`) instead of three ASCII dots `...` in all documentation, JSDoc, comments, and UI/log strings (except literal language syntax tokens).
     -   Never use em dashes (`U+2014`); use `; `, a new sentence, or an en dash (`–`).

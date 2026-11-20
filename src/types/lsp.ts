@@ -15,7 +15,7 @@
 /** Valid JSON-RPC 2.0 request/response correlation identifier. */
 export type JsonRpcId = number | string;
 
-/** Structured JSON-RPC 2.0 error payload returned on failed or cancelled requests. */
+/** Structured JSON-RPC 2.0 error payload returned on failed or canceled requests. */
 export interface JsonRpcErrorObject {
   /** Standard JSON-RPC 2.0 or LSP 3.17 negative integer error code. */
   readonly code: number;
@@ -49,7 +49,7 @@ export interface JsonRpcNotificationMessage {
 
 /** Inbound JSON-RPC 2.0 response frame body. */
 export interface JsonRpcResponseMessage {
-  /** Error object when the request failed or was cancelled. */
+  /** Error object when the request failed or was canceled. */
   readonly error?: JsonRpcErrorObject;
   /** Matching request identifier (`null` on parse/framing errors). */
   readonly id: JsonRpcId | null;

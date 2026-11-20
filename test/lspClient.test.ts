@@ -694,7 +694,7 @@ describe('Standalone CLI formatter (runCorexFmtCli)', () => {
     expect(formattedFromCrlf?.includes('\r')).toBe(false);
   });
 
-  it('returns null cleanly on syntax-error .cx buffers and pre-cancelled tokens', async () => {
+  it('returns null cleanly on syntax-error .cx buffers and pre-canceled tokens', async () => {
     const binaryPath = getLiveBinaryPath();
 
     expect(

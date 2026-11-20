@@ -115,13 +115,13 @@ export const LSP_SERVER_NOT_INITIALIZED = -32_002;
 export const LSP_REQUEST_FAILED = -32_803;
 
 /** LSP 3.17 server-initiated cancellation error code (`-32802`). */
-export const LSP_SERVER_CANCELLED = -32_802;
+export const LSP_SERVER_CANCELED = -32_802;
 
 /** LSP 3.17 content modified error code (`-32801`). */
 export const LSP_CONTENT_MODIFIED = -32_801;
 
 /** LSP 3.17 client-initiated `$/cancelRequest` error code (`-32800`). */
-export const LSP_REQUEST_CANCELLED = -32_800;
+export const LSP_REQUEST_CANCELED = -32_800;
 
 // ----------------------------------- REGEX PATTERNS ------------------------------------
 
@@ -146,7 +146,7 @@ const PARTIAL_SEP_RX = /\r\n\r$|\r?\n\r?$|\r$/;
  *
  * @param token   Optional structural cancellation token.
  */
-function isCancelled(token?: RequestCancelToken): boolean {
+function isCanceled(token?: RequestCancelToken): boolean {
   return Boolean(token?.isCancellationRequested);
 }
 
@@ -551,8 +551,8 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
     token?: RequestCancelToken,
     internalTimeout?: number
   ): Promise<unknown> {
-    if ((phase !== 1 && internalTimeout === undefined) || isCancelled(token)) {
-      throw createRpcError(LSP_REQUEST_CANCELLED, 'Cancelled');
+    if ((phase !== 1 && internalTimeout === undefined) || isCanceled(token)) {
+      throw createRpcError(LSP_REQUEST_CANCELED, 'Canceled');
     }
     if (pending.size >= MAX_PENDING_REQUESTS) {
       throw createRpcError(LSP_REQUEST_FAILED, 'Busy');
@@ -563,7 +563,7 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
 
     return new Promise<unknown>((resolve, reject) => {
       if (!sendFrame({ id: reqId, jsonrpc: '2.0', method, params }, `${method} (${reqId})`)) {
-        reject(createRpcError(LSP_REQUEST_CANCELLED, 'Closed'));
+        reject(createRpcError(LSP_REQUEST_CANCELED, 'Closed'));
         return;
       }
       const cancelMethod = '$/cancelRequest';
@@ -571,7 +571,7 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
         () => {
           if (takePending(reqId)) {
             sendNotify(cancelMethod, { id: reqId });
-            reject(createRpcError(LSP_REQUEST_CANCELLED, `Timeout: ${method}`));
+            reject(createRpcError(LSP_REQUEST_CANCELED, `Timeout: ${method}`));
           }
         },
         internalTimeout || options.requestTimeoutMs || DEFAULT_REQUEST_TIMEOUT
@@ -702,7 +702,7 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
     }
     stopPromise ??= (async () => {
       phase = 2;
-      rejectAll(createRpcError(LSP_REQUEST_CANCELLED, 'Stopped'));
+      rejectAll(createRpcError(LSP_REQUEST_CANCELED, 'Stopped'));
       await sendReq('shutdown', null, undefined, SHUTDOWN_TIMEOUT).catch(() => undefined);
       if (!isExited) {
         sendNotify('exit');
@@ -849,7 +849,7 @@ export async function runCorexFmtCli(
   isInternalCore = false,
   token?: RequestCancelToken
 ): Promise<string | null> {
-  if (isCancelled(token) || utf8ByteLen(sourceText) > MAX_LSP_CONTENT_LENGTH) {
+  if (isCanceled(token) || utf8ByteLen(sourceText) > MAX_LSP_CONTENT_LENGTH) {
     return null;
   }
 
@@ -858,7 +858,7 @@ export async function runCorexFmtCli(
   try {
     const tempFile = pathJoin(tempDir, 'buffer.cx');
     await writeFile(tempFile, sourceText, { mode: 0o600 });
-    if (isCancelled(token)) {
+    if (isCanceled(token)) {
       return null;
     }
 
@@ -882,7 +882,7 @@ export async function runCorexFmtCli(
       }
     });
 
-    if (!isOk || isCancelled(token)) {
+    if (!isOk || isCanceled(token)) {
       return null;
     }
     const tempStat = await stat(tempFile);

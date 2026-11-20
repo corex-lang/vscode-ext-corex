@@ -1803,12 +1803,12 @@ export function closeMockDocument(document: MockTextDocument): void {
 /**
  * Creates a controllable `MockCancelTokenSource` (`{ cancel, token }`).
  *
- * @param isInitiallyCancelled   Whether `token.isCancellationRequested` starts `true`.
+ * @param isInitiallyCanceled   Whether `token.isCancellationRequested` starts `true`.
  */
-export function createMockCancelToken(isInitiallyCancelled = false): MockCancelTokenSource {
+export function createMockCancelToken(isInitiallyCanceled = false): MockCancelTokenSource {
   const cancelEmitter = buildEventEmitter();
   const token: MockCancellationToken = {
-    isCancellationRequested: isInitiallyCancelled,
+    isCancellationRequested: isInitiallyCanceled,
     onCancellationRequested(listener: () => void): MockDisposable {
       if (token.isCancellationRequested) {
         listener();
