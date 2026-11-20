@@ -1,0 +1,83 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "pedantic": "off",
+    "perf": "warn",
+    "restriction": "warn",
+    "style": "warn",
+    "suspicious": "warn"
+  },
+  "env": { "builtin": true, "node": true },
+  "globals": {},
+  "ignorePatterns": [
+    "assets/**",
+    "dist/**",
+    "syntaxes/**",
+    "language-configuration.json",
+    "*.md",
+    "package.json"
+  ],
+  "plugins": ["eslint", "oxc", "typescript", "unicorn"],
+  "rules": {
+    "capitalized-comments": "off",
+    "eslint/no-ternary": "off",
+    "func-style": ["error", "declaration"],
+    "id-length": "off",
+    "import/no-nodejs-modules": [
+      "error",
+      {
+        "allow": [
+          "node:child_process",
+          "node:crypto",
+          "node:events",
+          "node:fs",
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "node:url"
+        ]
+      }
+    ],
+    "import/unambiguous": "off",
+    "max-params": "off",
+    "max-statements": "off",
+    "no-duplicate-imports": ["error", { "allowSeparateTypeImports": true }],
+    "no-magic-numbers": "off",
+    "no-plusplus": "error",
+    "no-undefined": "off",
+    "no-use-before-define": ["error", { "classes": true, "functions": true, "variables": true }],
+    "one-var": "off",
+    "oxc/no-async-await": "off",
+    "oxc/no-optional-chaining": "off",
+    "oxc/no-rest-spread-properties": "off",
+    "sort-imports": "off",
+    "typescript/consistent-type-definitions": ["error", "interface"],
+    "typescript/consistent-type-imports": [
+      "error",
+      { "disallowTypeAnnotations": true, "prefer": "type-imports" }
+    ],
+    "typescript/explicit-function-return-type": "off",
+    "typescript/explicit-module-boundary-types": "off",
+    "typescript/no-empty-object-type": ["error", { "allowInterfaces": "with-single-extends" }],
+    "typescript/no-explicit-any": "error",
+    "unicorn/filename-case": ["error", { "cases": { "camelCase": true, "pascalCase": true } }],
+    "unicorn/no-null": "off",
+    "unicorn/number-literal-case": "off"
+  },
+  "overrides": [
+    {
+      "files": ["esbuild.js"],
+      "rules": {
+        "import/no-commonjs": "off",
+        "no-console": "off",
+        "no-implicit-globals": "off",
+        "typescript/no-require-imports": "off",
+        "typescript/no-var-requires": "off",
+        "unicorn/prefer-module": "off"
+      }
+    },
+    { "files": ["test/**/*.ts"], "rules": { "no-await-in-loop": "off" } },
+    { "files": ["vitest.config.mts"], "rules": { "import/no-default-export": "off" } }
+  ]
+}

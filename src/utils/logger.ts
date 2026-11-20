@@ -1,0 +1,122 @@
+/**
+ * Logger – Lazy monochrome logging to the dedicated `CoreX` VS Code output channel.
+ *
+ * Defers `OutputChannel` allocation until the first diagnostic, lifecycle event, or JSON-RPC
+ * trace entry is emitted so extension activation incurs zero host UI overhead.
+ *
+ * Truncates untrusted error details and trace payloads to bounded sizes using monochrome glyphs.
+ */
+
+import { window } from 'vscode';
+import type { OutputChannel } from 'vscode';
+
+// --------------------------------------- CONSTS ----------------------------------------
+
+/** Canonical VS Code output channel display name. */
+const OUTPUT_CHANNEL_NAME = 'CoreX';
+
+/** Maximum character length appended for a single error stack or detail suffix (chars). */
+const MAX_ERROR_DETAIL_LENGTH = 4096;
+
+/** Maximum character length appended for a single verbose JSON-RPC trace payload (chars). */
+const MAX_TRACE_PAYLOAD_LENGTH = 16_384;
+
+// -------------------------------------- INTERNALS --------------------------------------
+
+/** Lazily initialized singleton VS Code output channel instance. */
+let outputChannel: OutputChannel | undefined = undefined;
+
+/** Returns the `CoreX` output channel, creating it lazily on first access. */
+function ensureChannel(): OutputChannel {
+  outputChannel ??= window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+  return outputChannel;
+}
+
+/**
+ * Appends a timestamped monochrome log line with an optional bounded detail block.
+ *
+ * @param glyph       Monochrome prefix symbol (`•`, `⚠`, `✗`, `▸ ->`, `▸ <-`).
+ * @param message     Primary log summary text.
+ * @param detail      Optional caught error or JSON-RPC trace payload.
+ * @param maxLength   Maximum UTF-16 code-unit length for `detail`.
+ */
+function appendLogLine(
+  glyph: string,
+  message: string,
+  detail?: unknown,
+  maxLength = MAX_ERROR_DETAIL_LENGTH
+): void {
+  let suffix = '';
+  if (detail !== undefined && detail !== null) {
+    const text = detail instanceof Error ? (detail.stack ?? detail.message) : String(detail);
+    suffix = `\n${text.length <= maxLength ? text : `${text.slice(0, maxLength)}…`}`;
+  }
+  ensureChannel().appendLine(`[${new Date().toISOString()}] ${glyph} ${message}${suffix}`);
+}
+
+// ------------------------------------- PUBLIC API --------------------------------------
+
+/** Returns the `CoreX` output channel, creating it lazily on first access. */
+export function getOutputChannel(): OutputChannel {
+  return ensureChannel();
+}
+
+/**
+ * Reveals the `CoreX` output channel in the VS Code panel.
+ *
+ * @param isPreservingFocus   Whether editor focus should remain unchanged (`false` by default).
+ */
+export function showOutputChannel(isPreservingFocus = false): void {
+  ensureChannel().show(isPreservingFocus);
+}
+
+/**
+ * Appends an informational lifecycle message to the `CoreX` output channel.
+ *
+ * @param message   Lifecycle event summary.
+ */
+export function logInfo(message: string): void {
+  appendLogLine('•', message);
+}
+
+/**
+ * Appends a non-fatal warning message to the `CoreX` output channel.
+ *
+ * @param message   Warning description.
+ * @param error     Optional underlying error cause.
+ */
+export function logWarn(message: string, error?: unknown): void {
+  appendLogLine('⚠', message, error);
+}
+
+/**
+ * Appends an error message to the `CoreX` output channel.
+ *
+ * @param message   Error description.
+ * @param error     Optional underlying error cause.
+ */
+export function logError(message: string, error?: unknown): void {
+  appendLogLine('✗', message, error);
+}
+
+/**
+ * Appends a JSON-RPC 2.0 traffic trace entry to the `CoreX` output channel.
+ *
+ * @param direction   Message direction (`'send'` to server or `'receive'` from server).
+ * @param summary     Concise method/id header line.
+ * @param payload     Optional serialized JSON body when `corex.trace.server` is `'verbose'`.
+ */
+export function logTrace(direction: 'send' | 'receive', summary: string, payload?: string): void {
+  appendLogLine(
+    `▸ ${direction === 'send' ? '->' : '<-'}`,
+    summary,
+    payload,
+    MAX_TRACE_PAYLOAD_LENGTH
+  );
+}
+
+/** Disposes the `CoreX` output channel if it was initialized. */
+export function disposeLogger(): void {
+  outputChannel?.dispose();
+  outputChannel = undefined;
+}

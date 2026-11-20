@@ -1,0 +1,1403 @@
+{
+  "$schema": "https://www.schemastore.org/tmlanguage.json",
+  "name": "CoreX",
+  "scopeName": "source.corex",
+  "patterns": [
+    { "include": "#file-header" },
+    { "include": "#core-rules" }
+  ],
+  "repository": {
+    "file-header": {
+      "patterns": [
+        {
+          "comment": "Line-0 TOML script frontmatter without shebang",
+          "name": "meta.embedded.block.frontmatter.toml.corex",
+          "begin": "\\A\\x{FEFF}?(---)[ \\t]*$",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.separator.frontmatter.corex" }
+          },
+          "end": "^(---)[ \\t]*$",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.separator.frontmatter.corex" }
+          },
+          "patterns": [{ "include": "#toml-frontmatter" }]
+        },
+        {
+          "comment": "Line-0 shebang with optional Line-1 TOML script frontmatter",
+          "begin": "\\A\\x{FEFF}?(#!)(.*)$",
+          "beginCaptures": {
+            "1": {
+              "name": "comment.line.number-sign.shebang.corex punctuation.definition.comment.shebang.corex"
+            },
+            "2": { "name": "comment.line.number-sign.shebang.corex" }
+          },
+          "end": "^(?!---[ \\t]*$)|(?<=^---)[ \\t]*$",
+          "patterns": [
+            {
+              "name": "meta.embedded.block.frontmatter.toml.corex",
+              "begin": "^(---)[ \\t]*$",
+              "beginCaptures": {
+                "1": { "name": "punctuation.definition.separator.frontmatter.corex" }
+              },
+              "end": "^(---)(?=[ \\t]*$)",
+              "endCaptures": {
+                "1": { "name": "punctuation.definition.separator.frontmatter.corex" }
+              },
+              "patterns": [{ "include": "#toml-frontmatter" }]
+            }
+          ]
+        }
+      ]
+    },
+    "toml-frontmatter": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.toml.corex",
+          "match": "(#).*$",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.toml.corex" }
+          }
+        },
+        {
+          "match": "^[ \\t]*(\\[\\[?)([A-Za-z0-9_.-]++)(\\]\\]?)",
+          "captures": {
+            "1": { "name": "punctuation.definition.table.begin.toml.corex" },
+            "2": { "name": "entity.name.section.table.toml.corex" },
+            "3": { "name": "punctuation.definition.table.end.toml.corex" }
+          }
+        },
+        {
+          "match": "(?<![A-Za-z0-9_-])([A-Za-z0-9_-]++)[ \\t]*(=)",
+          "captures": {
+            "1": { "name": "variable.other.key.toml.corex" },
+            "2": { "name": "keyword.operator.assignment.toml.corex" }
+          }
+        },
+        {
+          "name": "variable.other.key.toml.corex",
+          "match": "(?<![A-Za-z0-9_-])([A-Za-z0-9_-]++)(?=[ \\t]*[.\\]])"
+        },
+        {
+          "name": "string.quoted.triple.double.toml.corex",
+          "begin": "\"\"\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.toml.corex" }
+          },
+          "end": "\"\"\"",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.toml.corex" }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.toml.corex",
+              "match": "\\\\(?:[btnfr\"\\\\]|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.toml.corex",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.toml.corex" }
+          },
+          "end": "(\")|(?=$)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.toml.corex" }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.toml.corex",
+              "match": "\\\\(?:[btnfr\"\\\\]|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.triple.single.toml.corex",
+          "begin": "'''",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.toml.corex" }
+          },
+          "end": "'''",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.toml.corex" }
+          }
+        },
+        {
+          "name": "string.quoted.single.toml.corex",
+          "begin": "'",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.toml.corex" }
+          },
+          "end": "(')|(?=$)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.toml.corex" }
+          }
+        },
+        {
+          "name": "constant.language.boolean.toml.corex",
+          "match": "\\b(?:true|false)\\b"
+        },
+        {
+          "name": "constant.other.datetime.toml.corex",
+          "match": "\\b\\d{4}-\\d{2}-\\d{2}(?:[Tt ]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:[Zz]|[+-]\\d{2}:\\d{2})?)?\\b|\\b\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?\\b"
+        },
+        {
+          "name": "constant.numeric.toml.corex",
+          "match": "[+-]?(?:inf|nan)\\b|[+-]?(?:0[xX][0-9a-fA-F_]++|0[oO][0-7_]++|0[bB][01_]++|[0-9][0-9_]*+(?:\\.[0-9_]++)?(?:[eE][+-]?[0-9_]++)?)"
+        },
+        {
+          "name": "keyword.operator.assignment.toml.corex",
+          "match": "="
+        },
+        {
+          "name": "punctuation.section.braces.begin.toml.corex",
+          "match": "\\{"
+        },
+        {
+          "name": "punctuation.section.braces.end.toml.corex",
+          "match": "\\}"
+        },
+        {
+          "name": "punctuation.section.brackets.begin.toml.corex",
+          "match": "\\["
+        },
+        {
+          "name": "punctuation.section.brackets.end.toml.corex",
+          "match": "\\]"
+        },
+        {
+          "name": "punctuation.separator.comma.toml.corex",
+          "match": ","
+        },
+        {
+          "name": "punctuation.accessor.dot.toml.corex",
+          "match": "\\."
+        },
+        {
+          "name": "variable.other.key.toml.corex",
+          "match": "[A-Za-z0-9_-]++"
+        },
+        {
+          "name": "invalid.illegal.character.toml.corex",
+          "match": "\\S"
+        }
+      ]
+    },
+    "core-rules": {
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#strings" },
+        { "include": "#directives" },
+        { "include": "#attributes" },
+        { "include": "#declarations" },
+        { "include": "#labels" },
+        { "include": "#contextual-keywords" },
+        { "include": "#closure-params" },
+        { "include": "#root-module-chain" },
+        { "include": "#keywords" },
+        { "include": "#types-and-constants" },
+        { "include": "#tuple-projection" },
+        { "include": "#numbers" },
+        { "include": "#functions-and-members" },
+        { "include": "#operators" },
+        { "include": "#punctuation" },
+        { "include": "#identifiers" }
+      ]
+    },
+    "root-module-chain": {
+      "comment": "Root module path chain: cx.*, core.*, pkg.*, super.*",
+      "begin": "(?<!\\.)\\b(?:(cx|core|pkg)|(super))\\b(?=\\.)",
+      "beginCaptures": {
+        "1": { "name": "support.module.corex entity.name.namespace.corex" },
+        "2": { "name": "storage.modifier.visibility.scope.corex" }
+      },
+      "end": "(?!\\.[a-z_][a-z0-9_]*\\.)|(?=$)",
+      "patterns": [
+        {
+          "match": "(\\.)([a-z_][a-z0-9_]*)(?=\\.)",
+          "captures": {
+            "1": { "name": "punctuation.accessor.dot.corex" },
+            "2": { "name": "entity.name.namespace.corex" }
+          }
+        }
+      ]
+    },
+    "balanced-brackets": {
+      "begin": "\\[",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.brackets.begin.corex" }
+      },
+      "end": "\\]",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.brackets.end.corex" }
+      },
+      "patterns": [
+        { "include": "#balanced-delimiters" },
+        { "include": "#core-rules" }
+      ]
+    },
+    "balanced-parens": {
+      "begin": "\\(",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.parens.begin.corex" }
+      },
+      "end": "\\)",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.parens.end.corex" }
+      },
+      "patterns": [
+        { "include": "#balanced-delimiters" },
+        { "include": "#core-rules" }
+      ]
+    },
+    "balanced-braces": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.braces.begin.corex" }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.braces.end.corex" }
+      },
+      "patterns": [
+        { "include": "#balanced-delimiters" },
+        { "include": "#core-rules" }
+      ]
+    },
+    "balanced-delimiters": {
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#strings" },
+        { "include": "#balanced-parens" },
+        { "include": "#balanced-brackets" },
+        { "include": "#balanced-braces" }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.documentation.module.corex",
+          "match": "(//!).*$",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.documentation.corex" }
+          }
+        },
+        {
+          "name": "comment.line.documentation.corex",
+          "match": "(///)(?!/).*$",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.documentation.corex" }
+          }
+        },
+        {
+          "name": "comment.line.double-slash.corex",
+          "match": "(//).*$",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.corex" }
+          }
+        },
+        { "include": "#block-comment" }
+      ]
+    },
+    "block-comment": {
+      "name": "comment.block.corex",
+      "begin": "/\\*",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.comment.begin.corex" }
+      },
+      "end": "\\*/",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.comment.end.corex" }
+      },
+      "patterns": [{ "include": "#block-comment" }]
+    },
+    "directives": {
+      "match": "(#)(soa)\\b",
+      "captures": {
+        "1": { "name": "punctuation.definition.directive.corex" },
+        "2": { "name": "storage.modifier.soa.corex" }
+      }
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "meta.annotation.corex",
+          "begin": "(@)([A-Za-z_][A-Za-z0-9_]*)(\\()",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.annotation.corex" },
+            "2": { "name": "storage.type.annotation.corex" },
+            "3": { "name": "punctuation.section.parens.begin.corex" }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": { "name": "punctuation.section.parens.end.corex" }
+          },
+          "patterns": [
+            {
+              "match": "\\b([a-z_][a-z0-9_]*)[ \\t]*(:)(?!=)",
+              "captures": {
+                "1": { "name": "variable.other.property.corex" },
+                "2": { "name": "punctuation.separator.key-value.corex" }
+              }
+            },
+            { "include": "#balanced-delimiters" },
+            { "include": "#core-rules" }
+          ]
+        },
+        {
+          "name": "meta.annotation.corex",
+          "match": "(@)([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.corex" },
+            "2": { "name": "storage.type.annotation.corex" }
+          }
+        },
+        {
+          "name": "keyword.operator.pattern.at.corex",
+          "match": "@"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "comment": "Multiline raw byte string br#\"\"\"…\"\"\"#",
+          "name": "string.quoted.byte.raw.triple.corex",
+          "begin": "\\b(br)(#*)(\"\"\")(?=[ \\t]*$)",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.string.begin.corex" },
+            "2": { "name": "punctuation.definition.string.begin.corex" },
+            "3": { "name": "punctuation.definition.string.begin.corex" }
+          },
+          "end": "(\"\"\")(\\2)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.corex" },
+            "2": { "name": "punctuation.definition.string.end.corex" }
+          }
+        },
+        {
+          "comment": "Single-line raw byte string br#\"…\"#",
+          "name": "string.quoted.byte.raw.corex",
+          "begin": "\\b(br)(#*)(\")",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.string.begin.corex" },
+            "2": { "name": "punctuation.definition.string.begin.corex" },
+            "3": { "name": "punctuation.definition.string.begin.corex" }
+          },
+          "end": "(\")(\\2)|(?=$)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.corex" },
+            "2": { "name": "punctuation.definition.string.end.corex" }
+          }
+        },
+        {
+          "comment": "Multiline raw string r#\"\"\"…\"\"\"#",
+          "name": "string.quoted.other.raw.triple.corex",
+          "begin": "\\b(r)(#*)(\"\"\")(?=[ \\t]*$)",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.string.begin.corex" },
+            "2": { "name": "punctuation.definition.string.begin.corex" },
+            "3": { "name": "punctuation.definition.string.begin.corex" }
+          },
+          "end": "(\"\"\")(\\2)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.corex" },
+            "2": { "name": "punctuation.definition.string.end.corex" }
+          }
+        },
+        {
+          "comment": "Single-line raw string r#\"…\"#",
+          "name": "string.quoted.other.raw.corex",
+          "begin": "\\b(r)(#*)(\")",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.string.begin.corex" },
+            "2": { "name": "punctuation.definition.string.begin.corex" },
+            "3": { "name": "punctuation.definition.string.begin.corex" }
+          },
+          "end": "(\")(\\2)|(?=$)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.corex" },
+            "2": { "name": "punctuation.definition.string.end.corex" }
+          }
+        },
+        {
+          "comment": "Multiline cooked byte string b\"\"\"…\"\"\" (escapes, no interpolation)",
+          "name": "string.quoted.byte.triple.corex",
+          "begin": "\\b(b)(\"\"\")(?=[ \\t]*$)",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.string.begin.corex" },
+            "2": { "name": "punctuation.definition.string.begin.corex" }
+          },
+          "end": "\"\"\"",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.corex" }
+          },
+          "patterns": [{ "include": "#byte-escapes" }]
+        },
+        {
+          "comment": "Single-line cooked byte string b\"…\" (escapes, no interpolation)",
+          "name": "string.quoted.byte.double.corex",
+          "begin": "\\b(b)(\")",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.string.begin.corex" },
+            "2": { "name": "punctuation.definition.string.begin.corex" }
+          },
+          "end": "(\")|(?=$)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.corex" }
+          },
+          "patterns": [{ "include": "#byte-escapes" }]
+        },
+        {
+          "comment": "Single ASCII byte character literal b'…'",
+          "name": "string.quoted.single.byte.corex",
+          "begin": "\\b(b)(')",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.char.begin.corex" },
+            "2": { "name": "punctuation.definition.char.begin.corex" }
+          },
+          "end": "(')|(?=$)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.char.end.corex" }
+          },
+          "patterns": [{ "include": "#byte-escapes" }]
+        },
+        {
+          "comment": "Unicode scalar character literal '…'",
+          "name": "string.quoted.single.char.corex",
+          "begin": "'",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.char.begin.corex" }
+          },
+          "end": "(')|(?=$)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.char.end.corex" }
+          },
+          "patterns": [{ "include": "#char-escapes" }]
+        },
+        {
+          "comment": "Multiline interpolated UTF-8 string \"\"\"…\"\"\"",
+          "name": "string.quoted.triple.corex",
+          "begin": "\"\"\"(?=[ \\t]*$)",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.corex" }
+          },
+          "end": "\"\"\"",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.corex" }
+          },
+          "patterns": [
+            { "include": "#string-escapes" },
+            { "include": "#string-interpolation" }
+          ]
+        },
+        {
+          "comment": "Single-line interpolated UTF-8 string \"…\"",
+          "name": "string.quoted.double.corex",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.corex" }
+          },
+          "end": "(\")|(?=$)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.corex" }
+          },
+          "patterns": [
+            { "include": "#string-escapes" },
+            { "include": "#string-interpolation" }
+          ]
+        }
+      ]
+    },
+    "byte-escapes": {
+      "patterns": [
+        {
+          "name": "invalid.illegal.escape.unicode-in-byte.corex",
+          "match": "\\\\u\\{[^\\}\\r\\n]*\\}?"
+        },
+        {
+          "name": "constant.character.escape.corex",
+          "match": "\\\\(?:x[0-9a-fA-F]{2}|[nrt0\\\\\"'])"
+        },
+        {
+          "name": "constant.character.escape.line-continuation.corex",
+          "begin": "\\\\$",
+          "end": "^"
+        },
+        {
+          "name": "invalid.illegal.escape.corex",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "char-escapes": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.corex",
+          "match": "\\\\(?:u\\{[0-9a-fA-F]{1,6}\\}|x[0-9a-fA-F]{2}|[nrt0\\\\'\"])"
+        },
+        {
+          "name": "invalid.illegal.escape.corex",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "string-escapes": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.brace.corex",
+          "match": "\\{\\{|\\}\\}"
+        },
+        {
+          "name": "invalid.illegal.escape.brace.corex",
+          "match": "\\\\[\\{\\}]"
+        },
+        {
+          "name": "constant.character.escape.corex",
+          "match": "\\\\(?:u\\{[0-9a-fA-F]{1,6}\\}|x[0-9a-fA-F]{2}|[nrt0\\\\\"'])"
+        },
+        {
+          "name": "constant.character.escape.line-continuation.corex",
+          "begin": "\\\\$",
+          "end": "^"
+        },
+        {
+          "name": "invalid.illegal.escape.corex",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "string-interpolation": {
+      "name": "meta.interpolation.corex",
+      "contentName": "source.corex",
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.interpolation.begin.corex" }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.interpolation.end.corex" }
+      },
+      "patterns": [
+        {
+          "comment": "Identifier, self, or boolean immediately preceding :format_spec}",
+          "match": "\\b(?:(self)|(true|false)|([a-z_][a-z0-9_]*))\\b(?=[ \\t]*:(?:[^\\}\\r\\n\"'{]?[<>^])?[+-]?#?0?(?:[0-9]+(?:_[0-9]+)*)?(?:\\.[0-9]+(?:_[0-9]+)*)?[?xXboEefp]?\\})",
+          "captures": {
+            "1": { "name": "variable.language.self.corex" },
+            "2": { "name": "constant.language.boolean.corex" },
+            "3": { "name": "variable.other.readwrite.corex" }
+          }
+        },
+        { "include": "#interpolation-format-spec" },
+        { "include": "#interpolation-nested-braces" },
+        { "include": "$self" }
+      ]
+    },
+    "interpolation-format-spec": {
+      "match": "(?:(?<![=!<>:+\\-*/%&|^])(=)[ \\t]*)?(:(?:[^\\}\\r\\n\"'{]?[<>^])?[+-]?#?0?(?:[0-9]+(?:_[0-9]+)*)?(?:\\.[0-9]+(?:_[0-9]+)*)?[?xXboEefp]?)(?=\\})|(?<![=!<>:+\\-*/%&|^])(=)[ \\t]*(?=\\})",
+      "captures": {
+        "1": { "name": "storage.type.format.corex" },
+        "2": { "name": "storage.type.format.corex" },
+        "3": { "name": "storage.type.format.corex" }
+      }
+    },
+    "interpolation-nested-braces": {
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.braces.begin.corex" }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.braces.end.corex" }
+      },
+      "patterns": [
+        { "include": "#interpolation-nested-braces" },
+        { "include": "$self" }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "comment": "Module declaration: mod name",
+          "match": "\\b(mod)[ \\t]+([a-z_][a-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.module.corex" },
+            "2": { "name": "entity.name.namespace.corex" }
+          }
+        },
+        {
+          "comment": "Use import tree: use cx.fs.{self, File as F};",
+          "name": "meta.use.corex",
+          "begin": "\\b(use)\\b",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.import.corex" }
+          },
+          "end": ";",
+          "endCaptures": {
+            "0": { "name": "punctuation.terminator.statement.corex" }
+          },
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#strings" },
+            {
+              "name": "keyword.control.import.as.corex",
+              "match": "\\bas\\b"
+            },
+            {
+              "name": "variable.language.self.corex",
+              "match": "\\bself\\b"
+            },
+            {
+              "name": "support.module.corex entity.name.namespace.corex",
+              "match": "\\b(?:cx|core|pkg)\\b"
+            },
+            {
+              "name": "storage.modifier.visibility.scope.corex",
+              "match": "\\bsuper\\b(?=\\.)"
+            },
+            {
+              "name": "entity.name.namespace.corex",
+              "match": "\\b[a-z_][a-z0-9_]*\\b(?=\\.)"
+            },
+            {
+              "name": "constant.language.import-export-all.corex",
+              "match": "\\*"
+            },
+            { "include": "#types-and-constants" },
+            { "include": "#punctuation" },
+            { "include": "#identifiers" }
+          ]
+        },
+        {
+          "comment": "Enum declaration with variant member scoping",
+          "name": "meta.enum.corex",
+          "begin": "\\b(enum)[ \\t]+([A-Z][A-Za-z0-9_]*)",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.enum.corex" },
+            "2": { "name": "entity.name.type.enum.corex" }
+          },
+          "end": "(?<=\\})|(?=;)",
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#attributes" },
+            { "include": "#balanced-brackets" },
+            {
+              "begin": "\\{",
+              "beginCaptures": {
+                "0": { "name": "punctuation.section.braces.begin.corex" }
+              },
+              "end": "\\}",
+              "endCaptures": {
+                "0": { "name": "punctuation.section.braces.end.corex" }
+              },
+              "patterns": [
+                { "include": "#comments" },
+                { "include": "#attributes" },
+                {
+                  "comment": "Tuple variant payload types: Io(IoError)",
+                  "begin": "\\(",
+                  "beginCaptures": {
+                    "0": { "name": "punctuation.section.parens.begin.corex" }
+                  },
+                  "end": "\\)",
+                  "endCaptures": {
+                    "0": { "name": "punctuation.section.parens.end.corex" }
+                  },
+                  "patterns": [
+                    { "include": "#balanced-delimiters" },
+                    { "include": "#core-rules" }
+                  ]
+                },
+                {
+                  "comment": "Struct variant payload fields: Auditor { department_id: u32 }",
+                  "begin": "\\{",
+                  "beginCaptures": {
+                    "0": { "name": "punctuation.section.braces.begin.corex" }
+                  },
+                  "end": "\\}",
+                  "endCaptures": {
+                    "0": { "name": "punctuation.section.braces.end.corex" }
+                  },
+                  "patterns": [
+                    {
+                      "match": "\\b([a-z_][a-z0-9_]*)[ \\t]*(:)(?!=)",
+                      "captures": {
+                        "1": { "name": "variable.other.property.corex" },
+                        "2": { "name": "punctuation.separator.type.corex" }
+                      }
+                    },
+                    { "include": "#balanced-delimiters" },
+                    { "include": "#core-rules" }
+                  ]
+                },
+                {
+                  "comment": "Discriminant initializer: Relaxed = 0",
+                  "begin": "=(?!=|>)",
+                  "beginCaptures": {
+                    "0": { "name": "keyword.operator.assignment.corex" }
+                  },
+                  "end": "(?=[,\\}])",
+                  "patterns": [
+                    { "include": "#balanced-delimiters" },
+                    { "include": "#core-rules" }
+                  ]
+                },
+                {
+                  "name": "variable.other.enummember.corex",
+                  "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+                },
+                { "include": "#punctuation" },
+                { "include": "#identifiers" }
+              ]
+            },
+            { "include": "#core-rules" }
+          ]
+        },
+        {
+          "comment": "Struct, union, bit_field, and trait declarations",
+          "match": "\\b(struct|union|bit_field|trait)[ \\t]+([A-Z][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.type.corex" },
+            "2": { "name": "entity.name.type.corex" }
+          }
+        },
+        {
+          "comment": "Type alias declaration",
+          "match": "\\b(type)[ \\t]+([A-Z][A-Za-z0-9_]*|[a-z_][a-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.type.corex" },
+            "2": { "name": "entity.name.type.corex" }
+          }
+        },
+        {
+          "comment": "Const declaration: const MAX_SLOTS: usize = …",
+          "match": "\\b(const)[ \\t]+([A-Z][A-Z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.const.corex" },
+            "2": { "name": "constant.other.caps.corex entity.name.constant.corex" }
+          }
+        },
+        {
+          "comment": "Function declaration + parameter list",
+          "name": "meta.function.definition.corex",
+          "begin": "\\b(fn)[ \\t]+([a-z_][a-z0-9_]*|[A-Z][A-Za-z0-9_]*)\\b",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.function.corex" },
+            "2": { "name": "entity.name.function.corex" }
+          },
+          "end": "(?=[\\{=;])",
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#attributes" },
+            { "include": "#balanced-brackets" },
+            { "include": "#parameter-list" },
+            { "include": "#core-rules" }
+          ]
+        },
+        {
+          "comment": "Subscript declaration + parameter list",
+          "name": "meta.subscript.definition.corex",
+          "begin": "\\b(subscript)\\b",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.subscript.corex" }
+          },
+          "end": "(?=[\\{;])",
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#attributes" },
+            { "include": "#balanced-brackets" },
+            { "include": "#parameter-list" },
+            { "include": "#core-rules" }
+          ]
+        },
+        {
+          "comment": "Function pointer type: fn(a: u32, ...) -> i32",
+          "name": "meta.type.function.corex",
+          "begin": "\\b(fn)[ \\t]*(\\()",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.function.corex" },
+            "2": { "name": "punctuation.section.parens.begin.corex" }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": { "name": "punctuation.section.parens.end.corex" }
+          },
+          "patterns": [
+            { "include": "#parameter-entry" },
+            { "include": "#balanced-delimiters" },
+            { "include": "#core-rules" }
+          ]
+        },
+        {
+          "comment": "Prose test and bench items: test \"…\" (x: T) { … }",
+          "name": "meta.test.definition.corex",
+          "begin": "\\b(test|bench)(?=[ \\t]*(?:r#*)?\")",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.test.corex" }
+          },
+          "end": "(?=[\\{;])",
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#strings" },
+            { "include": "#balanced-brackets" },
+            { "include": "#parameter-list" },
+            { "include": "#core-rules" }
+          ]
+        },
+        {
+          "comment": "Local immutable binding: let name",
+          "match": "\\b(let)[ \\t]+([a-z_][a-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.variable.corex" },
+            "2": { "name": "variable.other.constant.corex" }
+          }
+        },
+        {
+          "comment": "Local mutable binding: var name",
+          "match": "\\b(var)[ \\t]+([a-z_][a-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "storage.modifier.mutability.corex" },
+            "2": { "name": "variable.other.readwrite.corex" }
+          }
+        },
+        {
+          "comment": "Immutable walrus condition binding: (n: usize := expr) or (n := expr)",
+          "match": "\\b([a-z_][a-z0-9_]*)(?:[ \\t]*(:)(?!=)(?=(?>(?:[^;:\\r\\n,\\(\\)\\{\\}]|\\([^;\\r\\n\\(\\)]*\\))*):=)|(?=[ \\t]*:=))",
+          "captures": {
+            "1": { "name": "variable.other.constant.corex" },
+            "2": { "name": "punctuation.separator.type.corex" }
+          }
+        }
+      ]
+    },
+    "parameter-list": {
+      "name": "meta.function.parameters.corex",
+      "begin": "\\(",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.parens.begin.corex" }
+      },
+      "end": "\\)",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.parens.end.corex" }
+      },
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#attributes" },
+        {
+          "comment": "Default value expression inside parameter list",
+          "begin": "=(?!=|>)",
+          "beginCaptures": {
+            "0": { "name": "keyword.operator.assignment.corex" }
+          },
+          "end": "(?=[,\\)])",
+          "patterns": [
+            { "include": "#balanced-delimiters" },
+            { "include": "#core-rules" }
+          ]
+        },
+        {
+          "comment": "Positional-only (/) and keyword-only (*) parameter zone separators",
+          "name": "keyword.operator.parameter-zone.corex",
+          "match": "(?:(?<=\\()|(?<=,))[ \\t]*([/*])[ \\t]*(?=[,\\)])"
+        },
+        { "include": "#parameter-entry" },
+        { "include": "#balanced-delimiters" },
+        { "include": "#core-rules" }
+      ]
+    },
+    "parameter-entry": {
+      "match": "(?:\\b(var)[ \\t]+)?\\b([a-z_][a-z0-9_]*)[ \\t]*(:)(?!=)",
+      "captures": {
+        "1": { "name": "storage.modifier.mutability.corex" },
+        "2": { "name": "variable.parameter.corex" },
+        "3": { "name": "punctuation.separator.type.corex" }
+      }
+    },
+    "labels": {
+      "patterns": [
+        {
+          "comment": "Loop and match FSM label declarations at statement/expression-start positions",
+          "match": "(?:^[ \\t]*+|(?:(?<!==|!=|<=|>=)(?<==)|(?<=;)|(?<==>)|(?<=\\|>)|\\b(return|yield|defer|errdefer|orelse|catch)\\b)[ \\t]*+)(?:([a-z_][a-z0-9_]*)[ \\t]*(:)[ \\t]*(?=(?:for|while|loop|match|comptime[ \\t]+for)\\b))",
+          "captures": {
+            "1": { "name": "keyword.control.corex" },
+            "2": { "name": "entity.name.label.corex" },
+            "3": { "name": "punctuation.separator.label.corex" }
+          }
+        },
+        {
+          "comment": "Labeled break and continue jumps: continue :fsm .Next, break :find idx",
+          "match": "\\b(break|continue)(?:[ \\t]*(:)((?:[a-z_][a-z0-9_]*)\\b))?",
+          "captures": {
+            "1": { "name": "keyword.control.flow.corex" },
+            "2": { "name": "punctuation.definition.label.corex" },
+            "3": { "name": "entity.name.label.corex" }
+          }
+        }
+      ]
+    },
+    "contextual-keywords": {
+      "patterns": [
+        {
+          "comment": "Visibility tiers pub(pkg) and pub(super)",
+          "match": "\\b(pub)[ \\t]*(\\()[ \\t]*(pkg|super)[ \\t]*(\\))",
+          "captures": {
+            "1": { "name": "storage.modifier.visibility.corex" },
+            "2": { "name": "punctuation.section.parens.begin.corex" },
+            "3": { "name": "storage.modifier.visibility.scope.corex" },
+            "4": { "name": "punctuation.section.parens.end.corex" }
+          }
+        },
+        {
+          "comment": "Safe raw address-of: &raw place and &raw mut place",
+          "match": "(&)[ \\t]*(raw)(?:[ \\t]+(mut))?\\b",
+          "captures": {
+            "1": { "name": "keyword.operator.borrow.corex" },
+            "2": { "name": "storage.modifier.raw.corex" },
+            "3": { "name": "storage.modifier.mutability.corex" }
+          }
+        },
+        {
+          "comment": "Definite-initialization out-projection: &out T and &out place",
+          "match": "(&)[ \\t]*(out)\\b",
+          "captures": {
+            "1": { "name": "keyword.operator.borrow.corex" },
+            "2": { "name": "storage.modifier.out.corex" }
+          }
+        },
+        {
+          "comment": "Subscript mutable projection arm: inout { yield &mut …; }",
+          "match": "(?:^[ \\t]*+|(?<=[\\{\\}])[ \\t]*)(inout)(?=[ \\t]*\\{)",
+          "captures": {
+            "1": { "name": "keyword.declaration.subscript.inout.corex" }
+          }
+        },
+        {
+          "comment": "Distinct nominal type wrapper: type Id = distinct u64;",
+          "match": "(?<!==|!=|<=|>=)(?<==)[ \\t]*(distinct)(?=[ \\t]+(?:[~&*\\[#\\(|]|[A-Za-z_][A-Za-z0-9_]*\\b))",
+          "captures": {
+            "1": { "name": "storage.modifier.distinct.corex" }
+          }
+        },
+        {
+          "comment": "Bind-many Type Group (any) and dynamic trait object (dyn) modifiers",
+          "match": "\\b(any|dyn)(?=[ \\t]+(?:\\(|(?:[a-z_][a-z0-9_]*+\\.)*+[A-Z][A-Za-z0-9_]*|(?:i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize|f32|f64|bool|char|str|unit|never|opaque)\\b))",
+          "captures": {
+            "1": { "name": "storage.modifier.type.corex" }
+          }
+        },
+        {
+          "comment": "Extern static item: extern \"C\" { static mut errno: c_int; }",
+          "match": "\\b(static)(?=[ \\t]+(?:mut[ \\t]+)?[A-Za-z_][A-Za-z0-9_]*[ \\t]*:)",
+          "captures": {
+            "1": { "name": "keyword.declaration.static.corex" }
+          }
+        }
+      ]
+    },
+    "closure-params": {
+      "comment": "Closure parameter lists and closure type signatures |…| at expression/type-start positions",
+      "begin": "(?:(?<=[\\(\\[\\{,;=:>])[ \\t]*+|^[ \\t]*+(?!\\|[ \\t]+(?!(?:own|mut|var)\\b)[a-z_][a-z0-9_]*[ \\t]+\\|)|(?:\\b(own)\\b|\\b(async)\\b|\\b(catch|errdefer|orelse|return|yield)\\b|\\b(and|or|not)\\b)[ \\t]*+)(?:(@)([A-Za-z_][A-Za-z0-9_]*)[ \\t]++)?(\\|)(?!\\||>|=)(?=[ \\t]*(?:@[A-Za-z_]|&|\\*|#soa\\b|\\(|\\[[ \\t]*[A-Za-z_&*#\\(\\[]|(?!(?:true|false)\\b)(?:[a-z_][a-z0-9_]*|[A-Z][A-Z0-9]*+[a-z][A-Za-z0-9]*+|[A-Z][0-9]*)\\b))(?=[^|\\r\\n]*\\|(?![ \\t]*=>)(?!\\|))",
+      "beginCaptures": {
+        "1": { "name": "storage.modifier.ownership.corex" },
+        "2": { "name": "keyword.control.async.corex" },
+        "3": { "name": "keyword.control.corex" },
+        "4": { "name": "keyword.operator.word.corex" },
+        "5": { "name": "meta.annotation.corex punctuation.definition.annotation.corex" },
+        "6": { "name": "meta.annotation.corex storage.type.annotation.corex" },
+        "7": { "name": "punctuation.definition.parameters.begin.corex" }
+      },
+      "end": "(\\|)|(?=$)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.parameters.end.corex" }
+      },
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#attributes" },
+        {
+          "comment": "Primitive types inside closure type |i32, u8| -> bool",
+          "name": "storage.type.primitive.corex",
+          "match": "\\b(?:i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f32|f64|bool|char|str|unit|never|opaque)\\b"
+        },
+        { "include": "#parameter-entry" },
+        {
+          "comment": "Untyped closure parameter with optional & / &mut / own / var modifier",
+          "match": "(?:(&)(?:[ \\t]*(mut)\\b)?|(?:\\b(var)[ \\t]+)?\\b(own)[ \\t]+|\\b(var)[ \\t]+)?\\b([a-z_][a-z0-9_]*)\\b(?=[ \\t]*[,\\|])",
+          "captures": {
+            "1": { "name": "keyword.operator.borrow.corex" },
+            "2": { "name": "storage.modifier.mutability.corex" },
+            "3": { "name": "storage.modifier.mutability.corex" },
+            "4": { "name": "storage.modifier.ownership.corex" },
+            "5": { "name": "storage.modifier.mutability.corex" },
+            "6": { "name": "variable.parameter.corex" }
+          }
+        },
+        { "include": "#balanced-parens" },
+        { "include": "#balanced-brackets" },
+        { "include": "#core-rules" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "comment": "Postfix .await suspension operator",
+          "match": "(?<!\\.)(\\.)(await)\\b",
+          "captures": {
+            "1": { "name": "punctuation.accessor.dot.corex" },
+            "2": { "name": "keyword.control.async.await.corex" }
+          }
+        },
+        {
+          "comment": "Async and await concurrency keywords",
+          "name": "keyword.control.async.corex",
+          "match": "\\b(?:async|await)\\b"
+        },
+        {
+          "comment": "Control-flow, branching, loop, defer, and recovery keywords",
+          "name": "keyword.control.corex",
+          "match": "\\b(?:if|else|match|for|in|while|loop|return|yield|defer|errdefer|catch|orelse|with|unreachable|use)\\b"
+        },
+        {
+          "comment": "Word-based boolean, pattern, and cast operators",
+          "name": "keyword.operator.word.corex",
+          "match": "\\b(?:and|or|not|is|as)\\b"
+        },
+        {
+          "comment": "Remaining declaration keywords when not matched by header rules",
+          "name": "keyword.declaration.corex",
+          "match": "\\b(?:fn|struct|enum|union|trait|impl|type|const|let|bit_field|subscript|mod)\\b"
+        },
+        {
+          "comment": "Mutability modifiers mut and var",
+          "name": "storage.modifier.mutability.corex",
+          "match": "\\b(?:mut|var)\\b"
+        },
+        {
+          "comment": "Explicit MVS ownership transfer modifier own",
+          "name": "storage.modifier.ownership.corex",
+          "match": "\\bown\\b"
+        },
+        {
+          "comment": "Unsafe block and function modifier",
+          "name": "storage.modifier.unsafe.corex keyword.other.unsafe.corex",
+          "match": "\\bunsafe\\b"
+        },
+        {
+          "comment": "Visibility, comptime, and FFI linkage modifiers",
+          "name": "storage.modifier.corex",
+          "match": "\\b(?:pub|comptime|extern)\\b"
+        },
+        {
+          "comment": "Where-clause and implicit Context capability keywords",
+          "name": "keyword.other.corex",
+          "match": "\\b(?:where|context)\\b"
+        },
+        {
+          "comment": "Boolean literals",
+          "name": "constant.language.boolean.corex",
+          "match": "\\b(?:true|false)\\b"
+        },
+        {
+          "comment": "Value receiver self and wildcard _",
+          "name": "variable.language.self.corex",
+          "match": "\\b(?:self|_)\\b"
+        }
+      ]
+    },
+    "types-and-constants": {
+      "patterns": [
+        {
+          "comment": "All 20 built-in CoreX primitive types (TokenKind.prim_type = 50)",
+          "name": "storage.type.primitive.corex",
+          "match": "\\b(?:i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f32|f64|bool|char|str|unit|never|opaque)\\b"
+        },
+        {
+          "comment": "All 13 canonical C ABI scalar aliases from cx.ffi / core.ffi",
+          "name": "support.type.builtin.ffi.corex",
+          "match": "\\b(?:c_schar|c_uchar|c_char|c_ushort|c_short|c_uint|c_int|c_ulonglong|c_longlong|c_ulong|c_long|c_longdouble|c_void)\\b"
+        },
+        {
+          "comment": "Self receiver type keyword",
+          "name": "entity.name.type.self.corex",
+          "match": "\\bSelf\\b"
+        },
+        {
+          "comment": "All 12 built-in Constrained Type Groups",
+          "name": "support.type.group.corex",
+          "match": "\\b(?:Signed|Unsigned|Integer|Float|Number|Comparable|Equatable|Bytes|Scalar|Copy|FromBytes|IntoBytes)\\b"
+        },
+        {
+          "comment": "Built-in prelude nominal and runtime types",
+          "name": "support.type.prelude.corex",
+          "match": "\\b(?:Option|Result|SourceLoc|FmtSpec|FmtArgs|FmtWriter|Bencher|TaskGroup|TaskHandle)\\b"
+        },
+        {
+          "comment": "Built-in global prelude traits",
+          "name": "entity.name.type.interface.corex",
+          "match": "\\b(?:AutoDrop|Clone|Debug|Default|Display|Drop|Eq|From|FromError|Future|Hash|Hasher|Iterator|Ord|Send|Sync|TrivialDrop)\\b"
+        },
+        {
+          "comment": "Contextual dot-variant (.Some, .None, .Ok, .Err, .SeqCst)",
+          "match": "(?<![A-Za-z0-9_.])(\\.)([A-Z][a-zA-Z0-9]*|[A-Z][0-9]*)\\b",
+          "captures": {
+            "1": { "name": "punctuation.accessor.dot.corex" },
+            "2": { "name": "variable.other.enummember.corex" }
+          }
+        },
+        {
+          "comment": "Qualified Type.Variant (State.Start, Color.Red, Ordering.SeqCst)",
+          "match": "\\b([A-Z][A-Z0-9]*+[a-z][A-Za-z0-9]*+|[A-Z][0-9]*)(\\.)([A-Z][A-Z0-9]*+[a-z][A-Za-z0-9]*+|[A-Z][0-9]*)\\b",
+          "captures": {
+            "1": { "name": "entity.name.type.corex" },
+            "2": { "name": "punctuation.accessor.dot.corex" },
+            "3": { "name": "variable.other.enummember.corex" }
+          }
+        },
+        {
+          "comment": "PascalCase nominal types, traits, UI @constructor calls, and single-letter type params (T, V4)",
+          "name": "entity.name.type.corex",
+          "match": "\\b(?:[A-Z][A-Z0-9_]*+[a-z][A-Za-z0-9_]*+|[A-Z][0-9]*)\\b"
+        },
+        {
+          "comment": "SCREAMING_SNAKE_CASE compile-time constants (TokenKind.const_ident = 53)",
+          "name": "constant.other.caps.corex variable.other.constant.corex",
+          "match": "\\b[A-Z][A-Z0-9_]+\\b"
+        }
+      ]
+    },
+    "tuple-projection": {
+      "comment": "Tuple index projection tup.0.1.2",
+      "match": "(?<=[A-Za-z0-9_\\)\\]\\?])(\\.)([0-9]+)(?![0-9A-Za-z_])",
+      "captures": {
+        "1": { "name": "punctuation.accessor.dot.corex" },
+        "2": { "name": "constant.numeric.decimal.corex" }
+      }
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "comment": "Hexadecimal integer literal with optional SE-13 integer suffix",
+          "name": "constant.numeric.hex.corex",
+          "match": "\\b0[xX][0-9a-fA-F]+(?:_[0-9a-fA-F]+)*(?:_?(i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize))?\\b",
+          "captures": {
+            "1": { "name": "keyword.other.unit.corex" }
+          }
+        },
+        {
+          "comment": "Binary integer literal with optional SE-13 integer suffix",
+          "name": "constant.numeric.binary.corex",
+          "match": "\\b0[bB][01]+(?:_[01]+)*(?:_?(i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize))?\\b",
+          "captures": {
+            "1": { "name": "keyword.other.unit.corex" }
+          }
+        },
+        {
+          "comment": "Octal integer literal with optional SE-13 integer suffix",
+          "name": "constant.numeric.octal.corex",
+          "match": "\\b0[oO][0-7]+(?:_[0-7]+)*(?:_?(i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize))?\\b",
+          "captures": {
+            "1": { "name": "keyword.other.unit.corex" }
+          }
+        },
+        {
+          "comment": "Floating-point literal with optional SE-13 f32/f64 suffix",
+          "name": "constant.numeric.float.corex",
+          "match": "\\b[0-9]+(?:_[0-9]+)*(?:\\.[0-9]+(?:_[0-9]+)*(?:[eE][+-]?[0-9]+(?:_[0-9]+)*)?|[eE][+-]?[0-9]+(?:_[0-9]+)*)(?:_?(f32|f64))?\\b",
+          "captures": {
+            "1": { "name": "keyword.other.unit.corex" }
+          }
+        },
+        {
+          "comment": "Decimal integer literal with optional SE-13 integer or float suffix",
+          "name": "constant.numeric.decimal.corex",
+          "match": "\\b[0-9]+(?:_[0-9]+)*(?:_?(i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize|f32|f64))?\\b",
+          "captures": {
+            "1": { "name": "keyword.other.unit.corex" }
+          }
+        }
+      ]
+    },
+    "functions-and-members": {
+      "patterns": [
+        {
+          "comment": "Postfix pointer/borrow dereference ptr.*",
+          "match": "(?<!\\.)(\\.)(\\*)",
+          "captures": {
+            "1": { "name": "punctuation.accessor.dot.corex" },
+            "2": { "name": "keyword.operator.dereference.corex" }
+          }
+        },
+        {
+          "comment": "Method or associated function call: .method(…) or .method[TypeArgs](…)",
+          "match": "(?<!\\.)(\\.)([a-z_][a-z0-9_]*)(?=[ \\t]*(?:\\(|\\[(?:const\\b|#soa\\b|(?:any|dyn)[ \\t]+|&(?:[ \\t]*(?:mut\\b|out\\b)|[\\[*\\(A-Z]|(?:i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize|f32|f64|bool|char|str|unit|never|opaque|c_schar|c_uchar|c_char|c_ushort|c_short|c_uint|c_int|c_ulonglong|c_longlong|c_ulong|c_long|c_longdouble|c_void)\\b)|own\\b|\\*|~[ \\t]*[A-Z]|\\||(?:unsafe|extern|fn)\\b|\\([ \\t]*(?:[A-Z&*\\(\\[]|(?:i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize|f32|f64|bool|char|str|unit|never|opaque)\\b)|\\[[ \\t]*(?:[A-Z&*\\(\\[]|(?:i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize|f32|f64|bool|char|str|unit|never|opaque)\\b)|(?:i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize|f32|f64|bool|char|str|unit|never|opaque|Self|c_schar|c_uchar|c_char|c_ushort|c_short|c_uint|c_int|c_ulonglong|c_longlong|c_ulong|c_long|c_longdouble|c_void)\\b(?![ \\t]*\\.)|(?:[a-z_][a-z0-9_]*+\\.)*+(?:[A-Z][A-Z0-9]*+[a-z][A-Za-z0-9]*+|[A-Z][0-9]*)[ \\t]*(?:[\\],?\\[|!+]|is\\b))))",
+          "captures": {
+            "1": { "name": "punctuation.accessor.dot.corex" },
+            "2": { "name": "entity.name.function.member.corex" }
+          }
+        },
+        {
+          "comment": "Free function call: func(…) or func[TypeArgs](…)",
+          "name": "entity.name.function.corex",
+          "match": "\\b([a-z_][a-z0-9_]*)(?=[ \\t]*(?:\\(|\\[(?:const\\b|#soa\\b|(?:any|dyn)[ \\t]+|&(?:[ \\t]*(?:mut\\b|out\\b)|[\\[*\\(A-Z]|(?:i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize|f32|f64|bool|char|str|unit|never|opaque|c_schar|c_uchar|c_char|c_ushort|c_short|c_uint|c_int|c_ulonglong|c_longlong|c_ulong|c_long|c_longdouble|c_void)\\b)|own\\b|\\*|~[ \\t]*[A-Z]|\\||(?:unsafe|extern|fn)\\b|\\([ \\t]*(?:[A-Z&*\\(\\[]|(?:i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize|f32|f64|bool|char|str|unit|never|opaque)\\b)|\\[[ \\t]*(?:[A-Z&*\\(\\[]|(?:i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize|f32|f64|bool|char|str|unit|never|opaque)\\b)|(?:i128|i64|i32|i16|i8|isize|u128|u64|u32|u16|u8|usize|f32|f64|bool|char|str|unit|never|opaque|Self|c_schar|c_uchar|c_char|c_ushort|c_short|c_uint|c_int|c_ulonglong|c_longlong|c_ulong|c_long|c_longdouble|c_void)\\b(?![ \\t]*\\.)|(?:[a-z_][a-z0-9_]*+\\.)*+(?:[A-Z][A-Z0-9]*+[a-z][A-Za-z0-9]*+|[A-Z][0-9]*)[ \\t]*(?:[\\],?\\[|!+]|is\\b))))"
+        },
+        {
+          "comment": "Module path chain before .Type or .CONST: pkg_mod.sub.Widget, limits.MAX_SLOTS",
+          "begin": "(?<!\\.)\\b(?!self\\b)([a-z_][a-z0-9_]*)(?=(?>(?:\\.[a-z_][a-z0-9_]*)*)\\.[A-Z])",
+          "beginCaptures": {
+            "1": { "name": "entity.name.namespace.corex" }
+          },
+          "end": "(?=\\.[A-Z])|(?=$)",
+          "patterns": [
+            {
+              "match": "(\\.)([a-z_][a-z0-9_]*)(?=\\.)",
+              "captures": {
+                "1": { "name": "punctuation.accessor.dot.corex" },
+                "2": { "name": "entity.name.namespace.corex" }
+              }
+            }
+          ]
+        },
+        {
+          "comment": "Struct field access: obj.field",
+          "match": "(?<!\\.)(\\.)([a-z_][a-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "punctuation.accessor.dot.corex" },
+            "2": { "name": "variable.other.property.corex" }
+          }
+        },
+        {
+          "comment": "Struct field declaration/initializer and named call argument: key: val",
+          "match": "\\b([a-z_][a-z0-9_]*)[ \\t]*(:)(?!=)",
+          "captures": {
+            "1": { "name": "variable.other.property.corex" },
+            "2": { "name": "punctuation.separator.key-value.corex" }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "comment": "C variadic parameter ellipsis ...",
+          "name": "keyword.operator.variadic.corex",
+          "match": "\\.\\.\\."
+        },
+        {
+          "comment": "Inclusive and exclusive range / struct spread operators ..= and ..",
+          "name": "keyword.operator.range.corex",
+          "match": "\\.\\.=?"
+        },
+        {
+          "comment": "Thin return-type arrow ->",
+          "name": "punctuation.separator.return-type.corex",
+          "match": "->"
+        },
+        {
+          "comment": "Match arm fat arrow =>",
+          "name": "keyword.operator.arrow.fat.corex",
+          "match": "=>"
+        },
+        {
+          "comment": "Data transformation pipeline |>",
+          "name": "keyword.operator.pipeline.corex",
+          "match": "\\|>"
+        },
+        {
+          "comment": "Condition walrus binding operator :=",
+          "name": "keyword.operator.assignment.walrus.corex",
+          "match": ":="
+        },
+        {
+          "comment": "Compound shift and bitwise assignment operators <<=, >>=, &=, |=, ^=",
+          "name": "keyword.operator.assignment.compound.bitwise.corex",
+          "match": "<<=|>>=|[&|^]="
+        },
+        {
+          "comment": "Compound arithmetic assignment operators +=, -=, *=, /=, %=",
+          "name": "keyword.operator.assignment.compound.corex",
+          "match": "[+\\-*/%]="
+        },
+        {
+          "comment": "Wrapping arithmetic operators +%, -%, *%",
+          "name": "keyword.operator.arithmetic.wrapping.corex",
+          "match": "[+\\-*]%"
+        },
+        {
+          "comment": "Saturating arithmetic operators +|, -|, *|",
+          "name": "keyword.operator.arithmetic.saturating.corex",
+          "match": "[+\\-*]\\|"
+        },
+        {
+          "comment": "Relational and equality comparison operators ==, !=, <=, >=, <, >",
+          "name": "keyword.operator.comparison.corex",
+          "match": "==|!=|<=|>=|<(?!=|<)|>(?!=|>)"
+        },
+        {
+          "comment": "Bitwise shift operators << and >>",
+          "name": "keyword.operator.bitwise.shift.corex",
+          "match": "<<|>>"
+        },
+        {
+          "comment": "Zero-parameter closure delimiter ||",
+          "name": "punctuation.definition.parameters.empty.corex",
+          "match": "\\|\\|"
+        },
+        {
+          "comment": "Payload-first Result type operator ! (T!E)",
+          "name": "keyword.operator.type.result.corex",
+          "match": "!(?!=)"
+        },
+        {
+          "comment": "Error propagation and optional type postfix operator ?",
+          "name": "keyword.operator.try-optional.corex",
+          "match": "\\?"
+        },
+        {
+          "comment": "End-relative slice/array length sentinel $",
+          "name": "keyword.operator.length.dollar.corex",
+          "match": "\\$"
+        },
+        {
+          "comment": "Assignment / single-expression function =",
+          "name": "keyword.operator.assignment.corex",
+          "match": "=(?!=|>)"
+        },
+        {
+          "comment": "Arithmetic and raw-pointer operators +, -, *, /, %",
+          "name": "keyword.operator.arithmetic.corex",
+          "match": "[+\\-*/%]"
+        },
+        {
+          "comment": "Bitwise, borrow, union-bound, and complement operators &, |, ^, ~",
+          "name": "keyword.operator.bitwise.corex",
+          "match": "[&|^~]"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.section.braces.begin.corex", "match": "\\{" },
+        { "name": "punctuation.section.braces.end.corex", "match": "\\}" },
+        { "name": "punctuation.section.parens.begin.corex", "match": "\\(" },
+        { "name": "punctuation.section.parens.end.corex", "match": "\\)" },
+        { "name": "punctuation.section.brackets.begin.corex", "match": "\\[" },
+        { "name": "punctuation.section.brackets.end.corex", "match": "\\]" },
+        { "name": "punctuation.terminator.statement.corex", "match": ";" },
+        { "name": "punctuation.separator.comma.corex", "match": "," },
+        { "name": "punctuation.separator.colon.corex", "match": ":" },
+        { "name": "punctuation.accessor.dot.corex", "match": "\\." }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.readwrite.corex",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+        },
+        {
+          "name": "invalid.illegal.character.corex",
+          "match": "\\S"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,222 @@
+{
+  "name": "corex",
+  "version": "1.0.0",
+  "displayName": "CoreX",
+  "description": "Official CoreX language support – TextMate syntax highlighting, built-in corex lsp client, semantic tokens, and corex fmt formatting.",
+  "categories": ["Programming Languages", "Linters", "Formatters"],
+  "keywords": [
+    "compiler",
+    "corex",
+    "cx",
+    "formatter",
+    "language",
+    "lsp",
+    "mvs",
+    "sast",
+    "syntax",
+    "systems"
+  ],
+  "author": { "name": "XulbuX", "email": "hi@xul.is" },
+  "maintainers": ["XulbuX <hi@xul.is>"],
+  "publisher": "corex-lang",
+  "bugs": { "url": "https://github.com/corex-lang/vscode-ext-corex/issues" },
+  "repository": { "type": "git", "url": "https://github.com/corex-lang/vscode-ext-corex" },
+  "license": "MIT",
+  "icon": "./assets/icon.png",
+  "galleryBanner": { "color": "#141414", "theme": "dark" },
+  "main": "./dist/extension.js",
+  "activationEvents": ["onLanguage:corex", "workspaceContains:corex.toml"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Syntax highlighting remains active in untrusted workspaces; spawning corex lsp and corex fmt requires Workspace Trust.",
+      "restrictedConfigurations": ["corex.executablePath"]
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Syntax highlighting remains active in virtual workspaces; spawning local corex processes requires a local filesystem."
+    }
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "corex",
+        "aliases": ["CoreX", "corex", "cx"],
+        "extensions": [".cx"],
+        "firstLine": "^#!.*\\bcorex\\b",
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "dark": "./assets/icon.png",
+          "light": "./assets/icon.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "corex",
+        "scopeName": "source.corex",
+        "path": "./syntaxes/corex.tmLanguage.json"
+      },
+      {
+        "scopeName": "markdown.corex.codeblock",
+        "path": "./syntaxes/corex.markdown.tmLanguage.json",
+        "injectTo": ["text.html.markdown"],
+        "embeddedLanguages": {
+          "meta.embedded.block.corex": "corex"
+        }
+      }
+    ],
+    "semanticTokenModifiers": [
+      {
+        "id": "mutable",
+        "description": "Mutable binding, parameter, or borrow (`var`, `mut`, `&mut`)."
+      },
+      {
+        "id": "consumedMove",
+        "description": "Value whose ownership is transferred via MVS move (`own` / `sink`)."
+      },
+      {
+        "id": "unsafe",
+        "description": "Unsafe or `extern` FFI declaration, block, or operation."
+      },
+      {
+        "id": "attribute",
+        "description": "Compile-time `@attribute` annotation or intrinsic directive."
+      },
+      {
+        "id": "linearResource",
+        "description": "Linear resource requiring explicit deterministic cleanup (`defer`)."
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "corex",
+        "scopes": {
+          "comment.documentation": ["comment.line.documentation.corex"],
+          "decorator.attribute": [
+            "storage.type.annotation.corex",
+            "punctuation.definition.annotation.corex"
+          ],
+          "keyword.async": ["keyword.control.async.corex", "keyword.control.corex"],
+          "keyword.unsafe": ["storage.modifier.unsafe.corex", "keyword.other.unsafe.corex"],
+          "macro.attribute": [
+            "storage.type.annotation.corex",
+            "entity.name.function.decorator.corex"
+          ],
+          "modifier": ["storage.modifier.corex"],
+          "modifier.consumedMove": [
+            "storage.modifier.ownership.corex",
+            "storage.modifier.corex"
+          ],
+          "modifier.mutable": [
+            "storage.modifier.mutability.corex",
+            "storage.modifier.corex"
+          ],
+          "namespace.defaultLibrary": [
+            "support.module.corex",
+            "entity.name.namespace.corex"
+          ],
+          "type.defaultLibrary": [
+            "storage.type.primitive.corex",
+            "support.type.corex"
+          ],
+          "variable.readonly.static": [
+            "variable.other.constant.corex",
+            "constant.other.caps.corex",
+            "entity.name.constant.corex"
+          ]
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "corex.restartServer",
+        "category": "CoreX",
+        "title": "Restart Language Server"
+      },
+      {
+        "command": "corex.showOutputChannel",
+        "category": "CoreX",
+        "title": "Show Output Channel"
+      }
+    ],
+    "configuration": {
+      "title": "CoreX",
+      "properties": {
+        "corex.enable": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable the CoreX language extension (`corex lsp` and `corex fmt` integration).\n\nStatic TextMate syntax highlighting remains active even when disabled."
+        },
+        "corex.lsp.enable": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable the built-in `corex lsp` language server for live diagnostics, semantic tokens, hover documentation, navigation, inlay hints, and code actions."
+        },
+        "corex.executablePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Explicit path to the `corex` compiler binary.\n\nWhen empty, the extension searches workspace build outputs (`build/stage0/corex`, `zig-out/bin/corex`, `build/corex`, and sibling `../corex/build/…` during toolchain development), `$COREX_HOME/bin/corex`, `~/.corex/bin/corex`, and `PATH`."
+        },
+        "corex.internalCore": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "always", "never"],
+          "markdownDescription": "Control whether `--internal-core` is passed to `corex lsp` and `corex fmt`.\n\n- `auto` – Enable automatically when editing the CoreX compiler or `core/` / `stdlib/cx/` workspace.\n- `always` – Always pass `--internal-core`.\n- `never` – Never pass `--internal-core`."
+        },
+        "corex.trace.server": {
+          "type": "string",
+          "default": "off",
+          "enum": ["off", "messages", "verbose"],
+          "markdownDescription": "Trace JSON-RPC 2.0 traffic between VS Code and `corex lsp` in the **CoreX** output channel.\n\n- `off` – Log lifecycle events and server errors only.\n- `messages` – Log JSON-RPC request, response, and notification headers/methods.\n- `verbose` – Log full JSON-RPC message payloads."
+        },
+        "corex.format.enable": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Register CoreX document and range formatting (`corex fmt`).\n\nUses `textDocument/formatting` and `textDocument/rangeFormatting` when `corex lsp` is active, and falls back to standalone `corex fmt` CLI when `corex lsp` is disabled or unavailable."
+        },
+        "corex.inlayHints.enable": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show `corex lsp` inlay hints for inferred binding types, `|>` pipeline intermediate types, parameter names, and MVS ownership modes."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[corex]": {
+        "editor.insertSpaces": true,
+        "editor.semanticHighlighting.enabled": true,
+        "editor.tabSize": 4,
+        "files.eol": "\n"
+      }
+    }
+  },
+  "scripts": {
+    "check": "pnpm run fmt:check && pnpm run lint:check && pnpm run type-check && pnpm run test && pnpm run compile:prod",
+    "compile": "node esbuild.js",
+    "compile:prod": "node esbuild.js --production",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "lint": "oxlint --fix",
+    "lint:check": "oxlint --deny-warnings",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "type-check": "tsc --noEmit",
+    "vscode:prepublish": "pnpm run compile:prod",
+    "watch": "node esbuild.js --watch"
+  },
+  "engines": { "vscode": "^1.95.0" },
+  "sponsor": { "url": "https://github.com/sponsors/xulbux" },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "~1.95.0",
+    "esbuild": "^0.27.0",
+    "oxfmt": "^0.71.0",
+    "oxlint": "^1.86.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.1",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.2.0"
+  }
+}
