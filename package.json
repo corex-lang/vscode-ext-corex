@@ -2,7 +2,7 @@
   "name": "corex",
   "version": "1.0.0",
   "displayName": "CoreX",
-  "description": "Official CoreX language support – TextMate syntax highlighting, built-in corex lsp client, semantic tokens, and corex fmt formatting.",
+  "description": "Official CoreX language support · syntax highlighting, IntelliSense, diagnostics, and formatting.",
   "categories": ["Programming Languages", "Linters", "Formatters"],
   "keywords": [
     "compiler",
