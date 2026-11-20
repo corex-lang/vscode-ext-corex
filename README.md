@@ -75,7 +75,7 @@ You can customize the extension in your `settings.json` (user or workspace):
 | `corex.lsp.enable` | `boolean` | `true` | Enable the language server for live diagnostics, semantic tokens, hover cards, navigation, inlay hints, and quick fixes. |
 | `corex.executablePath` | `string` | `""` | Explicit path to the `corex` binary. Leave empty to discover `corex` automatically from `~/.corex/bin`, `PATH`, or workspace builds. |
 | `corex.format.enable` | `boolean` | `true` | Enable CoreX document and selection formatting (`corex fmt`). |
-| `corex.inlayHints.enable` | `boolean` | `true` | Show inline hints for inferred types, `\|>` pipeline stages, parameter names, and ownership modes. |
+| `corex.inlayHints.enable` | `boolean` | `false` | Show inline hints for inferred binding types and parameter names. |
 
 (*For advanced options like language server trace logging, check the CoreX extension settings inside VS Code!*)
 

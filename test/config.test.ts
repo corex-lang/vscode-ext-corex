@@ -84,7 +84,7 @@ describe('Configuration enum guards and parseExtensionConfig', () => {
       enable: false,
       executablePath: '/usr/local/bin/corex',
       formatEnable: false,
-      inlayHintsEnable: false,
+      inlayHintsEnable: true,
       internalCore: 'always',
       lspEnable: false,
       traceServer: 'verbose',
@@ -94,7 +94,7 @@ describe('Configuration enum guards and parseExtensionConfig', () => {
       internalCore: 'always',
       isEnabled: false,
       isFormatEnabled: false,
-      isInlayHintsEnabled: false,
+      isInlayHintsEnabled: true,
       isLspEnabled: false,
       traceServer: 'verbose',
     });
@@ -121,7 +121,7 @@ describe('readExtensionConfig, invalidateConfigCache, and hasServerRestartConfig
     setWorkspaceConfig({
       executablePath: '/opt/corex',
       'format.enable': false,
-      'inlayHints.enable': false,
+      'inlayHints.enable': true,
       internalCore: 'never',
       'lsp.enable': true,
       'trace.server': 'messages',
@@ -133,7 +133,7 @@ describe('readExtensionConfig, invalidateConfigCache, and hasServerRestartConfig
       internalCore: 'never',
       isEnabled: true,
       isFormatEnabled: false,
-      isInlayHintsEnabled: false,
+      isInlayHintsEnabled: true,
       isLspEnabled: true,
       traceServer: 'messages',
     });
@@ -165,7 +165,7 @@ describe('readExtensionConfig, invalidateConfigCache, and hasServerRestartConfig
     expect(
       hasServerRestartConfigChange(
         baseCfg,
-        buildConfig({ isFormatEnabled: false, isInlayHintsEnabled: false, traceServer: 'verbose' })
+        buildConfig({ isFormatEnabled: false, isInlayHintsEnabled: true, traceServer: 'verbose' })
       )
     ).toBe(false);
 

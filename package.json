@@ -178,8 +178,8 @@
         },
         "corex.inlayHints.enable": {
           "type": "boolean",
-          "default": true,
-          "markdownDescription": "Show `corex lsp` inlay hints for inferred binding types, `|>` pipeline intermediate types, parameter names, and MVS ownership modes."
+          "default": false,
+          "markdownDescription": "Show `corex lsp` inlay hints for inferred binding types and parameter names."
         }
       }
     },

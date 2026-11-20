@@ -274,7 +274,7 @@ export interface LspServerCapabilities {
   readonly documentSymbolProvider?: boolean;
   /** Hover signature, contract, and documentation support. */
   readonly hoverProvider?: boolean;
-  /** Inferred type, parameter, and contract inlay hint support. */
+  /** Inferred type and parameter inlay hint support. */
   readonly inlayHintProvider?: boolean;
   /** Negotiated column offset encoding (`'utf-16'` or `'utf-8'`). */
   readonly positionEncoding?: LspPositionEncoding;
@@ -536,9 +536,9 @@ export type LspInlayHintKind = 1 | 2;
 
 /** Inlay hint item returned by `textDocument/inlayHint`. */
 export interface LspInlayHint {
-  /** Optional 1-based inlay hint kind (`1 = Type`, `2 = Parameter`; omitted on contract hints). */
+  /** Optional 1-based inlay hint kind (`1 = Type`, `2 = Parameter`). */
   readonly kind?: LspInlayHintKind;
-  /** Rendered hint label (e.g., `': i32'`, `'count:'`, or inferred `@no_alloc` contract note). */
+  /** Rendered hint label (e.g., `': i32'` or `'count:'`). */
   readonly label: string;
   /** Whether to render spacing before `label`. */
   readonly paddingLeft?: boolean;

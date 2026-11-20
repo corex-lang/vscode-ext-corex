@@ -27,7 +27,7 @@ export const DEFAULT_EXTENSION_CONFIG: ExtensionConfig = {
   internalCore: 'auto',
   isEnabled: true,
   isFormatEnabled: true,
-  isInlayHintsEnabled: true,
+  isInlayHintsEnabled: false,
   isLspEnabled: true,
   traceServer: 'off',
 };
@@ -88,7 +88,7 @@ export function parseExtensionConfig(rawInput: RawExtensionConfigInput): Extensi
     internalCore: isInternalCoreMode(rawInput.internalCore) ? rawInput.internalCore : 'auto',
     isEnabled: isTrueOrDefault(rawInput.enable),
     isFormatEnabled: isTrueOrDefault(rawInput.formatEnable),
-    isInlayHintsEnabled: isTrueOrDefault(rawInput.inlayHintsEnable),
+    isInlayHintsEnabled: rawInput.inlayHintsEnable === true,
     isLspEnabled: isTrueOrDefault(rawInput.lspEnable),
     traceServer: isTraceServerMode(rawInput.traceServer) ? rawInput.traceServer : 'off',
   };
@@ -111,7 +111,7 @@ export function readExtensionConfig(): ExtensionConfig {
       internalCore: isInternalCoreMode(rawMode) ? rawMode : 'auto',
       isEnabled: isTrueOrDefault(configView.get('enable')),
       isFormatEnabled: isTrueOrDefault(configView.get('format.enable')),
-      isInlayHintsEnabled: isTrueOrDefault(configView.get('inlayHints.enable')),
+      isInlayHintsEnabled: configView.get('inlayHints.enable') === true,
       isLspEnabled: isTrueOrDefault(configView.get('lsp.enable')),
       traceServer: isTraceServerMode(rawTrace) ? rawTrace : 'off',
     };
