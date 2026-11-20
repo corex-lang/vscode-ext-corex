@@ -11,7 +11,7 @@
     <a href="https://github.com/corex-lang/vscode-ext-corex/commits"><img src="https://svg.xul.is/badge/gh/corex-lang/vscode-ext-corex/commit?variant=3&color=neutral" /></a>
     <a href="https://github.com/sponsors/xulbux"><img src="https://svg.xul.is/badge/Sponsor?variant=2&color=rose&icon=heart&anim=pulse" /></a>
   </h1>
-  <h3>Official CoreX language support&emsp13;·&emsp13;syntax highlighting, IntelliSense, diagnostics, and formatting.</h3>
+  <h3>Official CoreX language support with syntax highlighting, IntelliSense, diagnostics, and formatting.</h3>
   <br><br>
 </div>
 
