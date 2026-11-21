@@ -552,7 +552,7 @@ describe('DR-22 keywords, primitives, contextual keywords, and Constrained Type 
       'pub async fn exercise(own item: Boxed, slice_ref: &mut [u32]) -> u32!u8 {',
       '    let flag = true and not false or (1 is i32);',
       '    var acc: u32 = comptime { 0 };',
-      '    defer { let _ = flag; }',
+      '    defer { _ = flag; }',
       '    errdefer { acc = 0; }',
       '    with context.allocator = context.allocator {',
       '        for elem in slice_ref {',
@@ -565,7 +565,7 @@ describe('DR-22 keywords, primitives, contextual keywords, and Constrained Type 
       '    let unwrapped = opt_v orelse 0;',
       '    let res_v: u32!u8 = .Ok(unwrapped);',
       '    let handled = res_v catch 0;',
-      '    unsafe { let _ = handled; }',
+      '    unsafe { _ = handled; }',
       '    await async { 1 };',
       '    match Choice.Alpha {',
       '        .Alpha => return .Ok(handled),',
@@ -637,7 +637,7 @@ describe('DR-22 keywords, primitives, contextual keywords, and Constrained Type 
       'pub fn probe(num: any Number, view: &dyn Display, slot: &out u32) {',
       '    let raw_ptr = &raw slot;',
       '    let raw_mut_ptr = &raw mut slot;',
-      '    let _ = (num, view, raw_ptr, raw_mut_ptr);',
+      '    _ = (num, view, raw_ptr, raw_mut_ptr);',
       '}',
       'impl Ring {',
       '    pub subscript(idx: usize) -> u32 {',
@@ -721,9 +721,9 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
       'impl PacketKind {',
       '    pub fn default_kind() -> Self {',
       '        let mask = GLOBAL_MASK;',
-      '        let _ = mask;',
+      '        _ = mask;',
       '        let explicit = PacketKind.Ping;',
-      '        let _ = explicit;',
+      '        _ = explicit;',
       '        return .Reset;',
       '    }',
       '}',
@@ -767,8 +767,8 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
       'pub fn compute(slice_soa: #soa &[Particle], raw_c: *c_void) -> usize {',
       '    let c_float = 1.0_f32;',
       '    let c_size_t = 0_usize;',
-      '    let _ = (raw_c, c_float, c_size_t);',
-      '    errdefer |err| { let _ = err; }',
+      '    _ = (raw_c, c_float, c_size_t);',
+      '    errdefer |err| { _ = err; }',
       '    let stride = @size_of[usize]();',
       '    fsm: match State.Idle {',
       '        .Idle => continue :fsm .Done,',
@@ -847,6 +847,46 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
       'punctuation.definition.separator.frontmatter.corex'
     );
     expect(findToken(bareTokens, 'package').leafScope).toBe('entity.name.section.table.toml.corex');
+
+    const lineDocAndEmptyBlockSnippet = [
+      '//! Module doc header',
+      '//// Banner divider comment (4 slashes)',
+      '/**/ /***/ /* regular /* nested */ block */',
+      '/// Outer item doc',
+      'pub fn documented() {}',
+    ].join('\n');
+    const validDocTokens = tokenizeNonWhitespace(getCorexGrammar(), lineDocAndEmptyBlockSnippet);
+    assertStrictCorexScopeInvariants('adr23a-valid-comments', validDocTokens);
+    expect(findToken(validDocTokens, '//!').leafScope).toBe(
+      'punctuation.definition.comment.documentation.corex'
+    );
+    expect(
+      hasScopeMatching(
+        findToken(validDocTokens, ' Module doc header'),
+        'comment.line.documentation.module.corex'
+      )
+    ).toBe(true);
+    expect(
+      hasScopeMatching(
+        findToken(validDocTokens, '// Banner divider comment (4 slashes)'),
+        'comment.line.double-slash.corex'
+      )
+    ).toBe(true);
+    expect(findToken(validDocTokens, '///').leafScope).toBe(
+      'punctuation.definition.comment.documentation.corex'
+    );
+
+    const bannedBlockDocs = tokenizeNonWhitespace(
+      getCorexGrammar(),
+      '/** banned outer /* nested */ doc */\n/*! banned inner doc */\npub fn after_doc() {}'
+    );
+    expect(findToken(bannedBlockDocs, '/**').leafScope).toBe(
+      'invalid.illegal.block-doc-comment.corex'
+    );
+    expect(findToken(bannedBlockDocs, '/*!').leafScope).toBe(
+      'invalid.illegal.block-doc-comment.corex'
+    );
+    expect(findToken(bannedBlockDocs, 'after_doc').leafScope).toBe('entity.name.function.corex');
   });
 });
 

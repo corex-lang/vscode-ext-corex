@@ -296,6 +296,12 @@
             "1": { "name": "punctuation.definition.comment.corex" }
           }
         },
+        {
+          "name": "invalid.illegal.block-doc-comment.corex",
+          "begin": "/\\*(?:\\*(?![*/])|!)",
+          "end": "\\*/",
+          "patterns": [{ "include": "#block-comment" }]
+        },
         { "include": "#block-comment" }
       ]
     },

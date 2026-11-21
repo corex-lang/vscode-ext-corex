@@ -47,11 +47,7 @@
     {
       "beforeText": "^\\s*/\\*(?!/)([^\\*]|\\*(?!/))*$",
       "afterText": "^\\s*\\*/$",
-      "action": { "indent": "indentOutdent", "appendText": " * " }
-    },
-    {
-      "beforeText": "^\\s*\\*(?!/)([^\\*]|\\*(?!/))*$",
-      "action": { "indent": "none", "appendText": "* " }
+      "action": { "indent": "indentOutdent" }
     },
     {
       "beforeText": "^(?:(?!//).)*\\{\\s*$",
