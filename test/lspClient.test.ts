@@ -49,12 +49,19 @@ import {
   openMockDocument,
   Position,
   resetVscodeMock,
+  setNextDialogChoice,
   setWorkspaceConfig,
   setWorkspaceFolders,
   setWorkspaceTrusted,
   Uri,
 } from './__mocks__/vscode';
-import type { MockDisposable, MockHover, MockTextDocument, MockTextEdit } from './__mocks__/vscode';
+import type {
+  MockDisposable,
+  MockHover,
+  MockMarkdownString,
+  MockTextDocument,
+  MockTextEdit,
+} from './__mocks__/vscode';
 
 // ---------------------------------------- TYPES ----------------------------------------
 
@@ -160,6 +167,18 @@ async function makeTempWorkspace(): Promise<string> {
 /** Creates a minimal `ExtensionContext` double backed by `contextSubscriptions`. */
 function createMockExtensionContext(): ExtensionContext {
   return { subscriptions: contextSubscriptions } as unknown as ExtensionContext;
+}
+
+/**
+ * Extracts plain or `MarkdownString` text from a mock status-bar tooltip.
+ *
+ * @param rawTooltip   Status-bar `tooltip` value (`string | MockMarkdownString | undefined`).
+ */
+function readTooltipValue(rawTooltip: string | MockMarkdownString | undefined): string {
+  if (rawTooltip === undefined) {
+    return '';
+  }
+  return typeof rawTooltip === 'string' ? rawTooltip : rawTooltip.value;
 }
 
 /**
@@ -724,7 +743,13 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     expect(mockState.providers.hover).toHaveLength(0);
     expect(mockState.providers.documentFormatting).toHaveLength(0);
     expect(mockState.statusBarItems[0]?.text).toBe('$(warning) CoreX');
-    expect(mockState.statusBarItems[0]?.tooltip).toBe('CoreX: Untrusted.');
+    expect(mockState.statusBarItems[0]?.command).toBe('corex.showStatusMenu');
+    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
+      '**CoreX** – Untrusted.'
+    );
+    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
+      '**Language Server (`corex lsp`):** Untrusted'
+    );
 
     await commands.executeCommand('corex.restartServer');
     await sleepMs(20);
@@ -745,7 +770,10 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     const mockState = getMockState();
     expect(mockState.providers.hover).toHaveLength(0);
     expect(mockState.providers.documentRangeFormatting).toHaveLength(0);
-    expect(mockState.statusBarItems[0]?.tooltip).toBe('CoreX: CLI fmt.');
+    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
+      '**CoreX** – CLI fmt.'
+    );
+    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain('Ready (CLI)');
 
     const crlfDoc = openMockDocument({
       fsPath: path.join(EXT_ROOT, 'sample_cli.cx'),
@@ -784,6 +812,15 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     const mockState = getMockState();
     expect(mockState.commands.has('corex.restartServer')).toBe(true);
     expect(mockState.commands.has('corex.showOutputChannel')).toBe(true);
+    expect(mockState.commands.has('corex.showStatusMenu')).toBe(true);
+    expect(mockState.commands.has('corex.stopServer')).toBe(true);
+    expect(mockState.commands.has('corex.toggleInlayHints')).toBe(true);
+    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
+      'Language Server (`corex lsp`):'
+    );
+    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
+      'Formatter (`corex fmt`):'
+    );
     expect(mockState.providers.hover).toHaveLength(1);
     expect(mockState.providers.definition).toHaveLength(1);
     expect(mockState.providers.completion).toHaveLength(1);
@@ -822,6 +859,25 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     await commands.executeCommand('corex.showOutputChannel');
     expect(mockState.outputChannels[0]?.isShown).toBe(true);
 
+    // Exercise status-bar QuickPick menu: Stop Language Server -> Start Language Server -> Toggle Inlay Hints:
+    setNextDialogChoice('Stop Language Server');
+    await commands.executeCommand('corex.showStatusMenu');
+    expect(mockState.quickPicks.length).toBeGreaterThanOrEqual(1);
+    expect(mockState.statusBarItems[0]?.text).toBe('$(circle-slash) CoreX');
+    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
+      '**CoreX** – Stopped.'
+    );
+
+    setNextDialogChoice('Start Language Server');
+    await commands.executeCommand('corex.showStatusMenu');
+    await waitUntil(
+      () => getMockState().statusBarItems[0]?.text === '$(check) CoreX',
+      'LSP restarted from status menu'
+    );
+
+    await commands.executeCommand('corex.toggleInlayHints');
+    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain('Inlay Hints: On');
+
     const [activeStatusBar] = mockState.statusBarItems;
     const [activeCollection] = mockState.collections;
 
@@ -831,7 +887,7 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     expect(activeCollection?.isDisposed).toBe(true);
     expect(mockState.providers.hover).toHaveLength(0);
     expect(mockState.providers.documentFormatting).toHaveLength(0);
-  });
+  }, 20_000);
 
   it('evicts VFS tracking on oversized > 16 MiB didChange and re-synchronizes via didOpen on next small edit', async () => {
     const binaryPath = getLiveBinaryPath();
@@ -888,7 +944,7 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
       () => (getMockState().collections[0]?.get(openedDoc.uri)?.length ?? -1) === 0,
       'clean diagnostics after recovering to valid code'
     );
-  });
+  }, 20_000);
 
   it('delivers FileSystemWatcher events when /build/ is an ancestor above workspace root while ignoring <workspace>/build/*', async () => {
     const outerTempDir = await mkdtemp(path.join(tmpdir(), 'corex-parent-'));

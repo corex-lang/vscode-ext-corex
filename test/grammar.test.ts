@@ -107,6 +107,7 @@ const ALLOWED_LEAF_PREFIXES: ReadonlySet<string> = new Set<string>([
   'constant',
   'entity',
   'keyword',
+  'markup',
   'punctuation',
   'storage',
   'string',
@@ -457,7 +458,7 @@ afterAll(() => {
 
 // ----------- Real Core Stdlib & Comparisons Corpus ------------
 
-describe('Corpus scope invariants – ../corex/core/**/*.cx and ../corex/docs/COMPARISONS.md', () => {
+describe('Corpus scope invariants – ../corex/{core,stdlib/cx}/**/*.cx and ../corex/docs/COMPARISONS.md', () => {
   it('enforces all 3 strict scope invariants across all >= 14 real ../corex/core/**/*.cx modules', async () => {
     const cxFilePaths = await collectCxFiles(path.resolve(COREX_ROOT, 'core'));
     expect(cxFilePaths.length).toBeGreaterThanOrEqual(14);
@@ -471,11 +472,24 @@ describe('Corpus scope invariants – ../corex/core/**/*.cx and ../corex/docs/CO
     }
   });
 
-  it('enforces all 3 strict scope invariants across all >= 9 fenced cx showcases in COMPARISONS.md', async () => {
+  it('enforces all 3 strict scope invariants across all >= 5 real ../corex/stdlib/cx/**/*.cx modules', async () => {
+    const cxFilePaths = await collectCxFiles(path.resolve(COREX_ROOT, 'stdlib', 'cx'));
+    expect(cxFilePaths.length).toBeGreaterThanOrEqual(5);
+
+    const grammar = getCorexGrammar();
+    for (const filePath of cxFilePaths) {
+      assertStrictCorexScopeInvariants(
+        path.relative(COREX_ROOT, filePath),
+        tokenizeNonWhitespace(grammar, await readFile(filePath, 'utf8'))
+      );
+    }
+  }, 25_000);
+
+  it('enforces all 3 strict scope invariants across all >= 10 fenced cx showcases in COMPARISONS.md', async () => {
     const showcases = extractCxShowcases(
       await readFile(path.resolve(COREX_ROOT, 'docs', 'COMPARISONS.md'), 'utf8')
     );
-    expect(showcases.length).toBeGreaterThanOrEqual(9);
+    expect(showcases.length).toBeGreaterThanOrEqual(10);
 
     const grammar = getCorexGrammar();
     for (let i = 0; i < showcases.length; i += 1) {
@@ -595,12 +609,12 @@ describe('DR-22 keywords, primitives, contextual keywords, and Constrained Type 
       'let null = 0; let fn_name = 1; let own_value = 2; let u8_slice = 3; let true_flag = null + fn_name;'
     );
     assertStrictCorexScopeInvariants('negative-identifier-prefixes', negTokens);
-    expect(findToken(negTokens, 'null', 0).leafScope).toBe('variable.other.constant.corex');
+    expect(findToken(negTokens, 'null', 0).leafScope).toBe('variable.other.readwrite.corex');
     expect(findToken(negTokens, 'null', 1).leafScope).toBe('variable.other.readwrite.corex');
-    expect(findToken(negTokens, 'fn_name', 0).leafScope).toBe('variable.other.constant.corex');
-    expect(findToken(negTokens, 'own_value', 0).leafScope).toBe('variable.other.constant.corex');
-    expect(findToken(negTokens, 'u8_slice', 0).leafScope).toBe('variable.other.constant.corex');
-    expect(findToken(negTokens, 'true_flag', 0).leafScope).toBe('variable.other.constant.corex');
+    expect(findToken(negTokens, 'fn_name', 0).leafScope).toBe('variable.other.readwrite.corex');
+    expect(findToken(negTokens, 'own_value', 0).leafScope).toBe('variable.other.readwrite.corex');
+    expect(findToken(negTokens, 'u8_slice', 0).leafScope).toBe('variable.other.readwrite.corex');
+    expect(findToken(negTokens, 'true_flag', 0).leafScope).toBe('variable.other.readwrite.corex');
   });
 
   it('tokenizes all 20 primitive types (including opaque) and all 12 Constrained Type Groups', () => {
@@ -700,7 +714,7 @@ describe('DR-22 keywords, primitives, contextual keywords, and Constrained Type 
       'super',
     ];
     for (const identName of localContextualNames) {
-      expect(findToken(negTokens, identName, 0).leafScope).toBe('variable.other.constant.corex');
+      expect(findToken(negTokens, identName, 0).leafScope).toBe('variable.other.readwrite.corex');
       expect(findToken(negTokens, identName, 1).leafScope).toBe('variable.other.readwrite.corex');
     }
   });
@@ -794,8 +808,8 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
     );
     expect(findToken(tokens, '+inf').leafScope).toBe('constant.numeric.toml.corex');
     expect(findToken(tokens, 'c_void').leafScope).toBe('support.type.builtin.ffi.corex');
-    expect(findToken(tokens, 'c_float', 0).leafScope).toBe('variable.other.constant.corex');
-    expect(findToken(tokens, 'c_size_t', 0).leafScope).toBe('variable.other.constant.corex');
+    expect(findToken(tokens, 'c_float', 0).leafScope).toBe('variable.other.readwrite.corex');
+    expect(findToken(tokens, 'c_size_t', 0).leafScope).toBe('variable.other.readwrite.corex');
     expect(findToken(tokens, '|', 0).leafScope).toBe(
       'punctuation.definition.parameters.begin.corex'
     );
@@ -876,6 +890,68 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
       'punctuation.definition.comment.documentation.corex'
     );
 
+    const markdownDocSnippet = [
+      '//! # Module Heading',
+      '//! Inline `Vec[u8]` and ``a `b` c`` with ***both***, ___uboth___, **bold**, __ubold__, *italic*, _emph_, ~~legacy~~, ~Copy (~10 ms), and [Spec](https://corex.dev).',
+      String.raw`//! Escapes: Hello\nworld! and \* in docs.`,
+      String.raw`// Strip trailing \r\nbytes`,
+      '// Inline `buf` with **care**',
+      '/// ```cx',
+      '/// let sample = 1;',
+      '/// ```',
+      'pub fn doc_rich() {}',
+    ].join('\n');
+    const mdDocTokens = tokenizeNonWhitespace(getCorexGrammar(), markdownDocSnippet);
+    assertStrictCorexScopeInvariants('docstring-markdown-scopes', mdDocTokens);
+    expect(findToken(mdDocTokens, '#').leafScope).toBe('punctuation.definition.comment.corex');
+    expect(findToken(mdDocTokens, ' Module Heading').leafScope).toBe(
+      'markup.heading.markdown.corex'
+    );
+    expect(findToken(mdDocTokens, '`', 0).leafScope).toBe('punctuation.definition.comment.corex');
+    expect(findToken(mdDocTokens, 'Vec[u8]').leafScope).toBe(
+      'punctuation.definition.raw.markdown.corex'
+    );
+    expect(findToken(mdDocTokens, 'a `b` c').leafScope).toBe(
+      'punctuation.definition.raw.markdown.corex'
+    );
+    expect(findToken(mdDocTokens, String.raw`\n`, 0).leafScope).toBe(
+      'constant.character.escape.comment.corex'
+    );
+    expect(findToken(mdDocTokens, String.raw`\r`).leafScope).toBe(
+      'constant.character.escape.comment.corex'
+    );
+    expect(findToken(mdDocTokens, '***', 0).leafScope).toBe('punctuation.definition.comment.corex');
+    expect(hasScopeMatching(findToken(mdDocTokens, 'both'), 'markup.bold.markdown.corex')).toBe(
+      true
+    );
+    expect(findToken(mdDocTokens, 'both').leafScope).toBe('markup.italic.markdown.corex');
+    expect(findToken(mdDocTokens, '___', 0).leafScope).toBe('punctuation.definition.comment.corex');
+    expect(hasScopeMatching(findToken(mdDocTokens, 'uboth'), 'markup.bold.markdown.corex')).toBe(
+      true
+    );
+    expect(findToken(mdDocTokens, 'uboth').leafScope).toBe('markup.italic.markdown.corex');
+    expect(findToken(mdDocTokens, '**', 0).leafScope).toBe('punctuation.definition.comment.corex');
+    expect(findToken(mdDocTokens, 'bold').leafScope).toBe('markup.bold.markdown.corex');
+    expect(findToken(mdDocTokens, '__', 0).leafScope).toBe('punctuation.definition.comment.corex');
+    expect(findToken(mdDocTokens, 'ubold').leafScope).toBe('markup.bold.markdown.corex');
+    expect(findToken(mdDocTokens, 'italic').leafScope).toBe('markup.italic.markdown.corex');
+    expect(findToken(mdDocTokens, 'emph').leafScope).toBe('markup.italic.markdown.corex');
+    expect(findToken(mdDocTokens, '~~', 0).leafScope).toBe('punctuation.definition.comment.corex');
+    expect(findToken(mdDocTokens, 'legacy').leafScope).toBe('markup.strikethrough.markdown.corex');
+    expect(findToken(mdDocTokens, 'Spec').leafScope).toBe(
+      'punctuation.definition.raw.markdown.corex'
+    );
+    expect(findToken(mdDocTokens, 'https://corex.dev').leafScope).toBe(
+      'markup.underline.link.markdown.corex'
+    );
+    expect(findToken(mdDocTokens, String.raw`\*`).leafScope).toBe(
+      'constant.character.escape.markdown.corex'
+    );
+    expect(findToken(mdDocTokens, '```', 0).leafScope).toBe('punctuation.definition.comment.corex');
+    expect(findToken(mdDocTokens, 'cx').leafScope).toBe(
+      'punctuation.definition.raw.markdown.corex'
+    );
+
     const bannedBlockDocs = tokenizeNonWhitespace(
       getCorexGrammar(),
       '/** banned outer /* nested */ doc */\n/*! banned inner doc */\npub fn after_doc() {}'
@@ -913,8 +989,9 @@ describe('Strings, recursive {expr=:#06x} interpolation, numbers, and closure vs
       '    """#;',
       String.raw`let ch_utf8 = '\u{10348}';`,
       String.raw`let ch_byte = b'\x41';`,
-      'let nested_interp = "outer {format_tag("inner {val=:#04x}")=}";',
-      'let var_specs = "{x:?} {addr:#010x} {mask:08b} {ratio:.2f} {name:>12} {val:─^10} {self:#x} {true:?}";',
+      String.raw`let plain_tmpl = "[{loc.file}:{loc.line}] = {value:?}\n";`,
+      'let nested_interp = f"outer {format_tag(f"inner {val=:#04x}")=}";',
+      'let var_specs = f"{x:?} {addr:#010x} {mask:08b} {ratio:.2f} {name:>12} {val:─^10} {self:#x} {true:?}";',
     ].join('\n');
 
     const tokens = tokenizeNonWhitespace(getCorexGrammar(), literalsSnippet);
@@ -923,7 +1000,10 @@ describe('Strings, recursive {expr=:#06x} interpolation, numbers, and closure vs
     expect(findToken(tokens, '{{').leafScope).toBe('constant.character.escape.brace.corex');
     expect(findToken(tokens, 'world').leafScope).toBe('string.quoted.double.corex');
     expect(findToken(tokens, '}}').leafScope).toBe('constant.character.escape.brace.corex');
-    expect(findToken(tokens, ':#06x').leafScope).toBe('storage.type.format.corex');
+    expect(findToken(tokens, '{1 + 2=:#06x}').leafScope).toBe('keyword.operator.placeholder.corex');
+    expect(findToken(tokens, '{loc.file}').leafScope).toBe('keyword.operator.placeholder.corex');
+    expect(findToken(tokens, '{loc.line}').leafScope).toBe('keyword.operator.placeholder.corex');
+    expect(findToken(tokens, '{value:?}').leafScope).toBe('keyword.operator.placeholder.corex');
     expect(findToken(tokens, ':#04x').leafScope).toBe('storage.type.format.corex');
     expect(findToken(tokens, 'addr').leafScope).toBe('variable.other.readwrite.corex');
     expect(findToken(tokens, ':?').leafScope).toBe('storage.type.format.corex');
@@ -954,7 +1034,7 @@ describe('Strings, recursive {expr=:#06x} interpolation, numbers, and closure vs
 
       expect(findToken(tokens, 'let', 1).leafScope).toBe('keyword.declaration.variable.corex');
       expect(findToken(tokens, 'recovered_after_eol').leafScope).toBe(
-        'variable.other.constant.corex'
+        'variable.other.readwrite.corex'
       );
       expect(findToken(tokens, '\\').leafScope).toBe(
         'constant.character.escape.line-continuation.corex'
@@ -962,7 +1042,7 @@ describe('Strings, recursive {expr=:#06x} interpolation, numbers, and closure vs
       expect(hasScopeMatching(findToken(tokens, 'second line'), 'string.quoted.double.corex')).toBe(
         true
       );
-      expect(findToken(tokens, 'after_continued').leafScope).toBe('variable.other.constant.corex');
+      expect(findToken(tokens, 'after_continued').leafScope).toBe('variable.other.readwrite.corex');
 
       const badTokens = tokenizeNonWhitespace(
         getCorexGrammar(),
@@ -1036,6 +1116,8 @@ describe('Non-backtracking ReDoS latency (< 50 ms on 4000-char adversarial lines
       `if (walrus_candidate: ${'LongTypeSegment '.repeat(255)}unclosed`,
       `let interp = "prefix {${'long_variable_identifier + '.repeat(150)}tail=:#06x}";`,
       `/// ${'documentation_token_segment '.repeat(150)}`,
+      `/// **unclosed_bold ${'*word '.repeat(700)}`,
+      `/// \`unclosed_code ${'segment_'.repeat(520)}`,
       `x.foo[A${'a'.repeat(4005)}`,
       `let cls = |A${'a'.repeat(4005)}_| x;`,
       `let qual = A${'a'.repeat(2005)}.B${'b'.repeat(2005)}_;`,

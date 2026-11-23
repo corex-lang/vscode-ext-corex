@@ -277,24 +277,30 @@
       "patterns": [
         {
           "name": "comment.line.documentation.module.corex",
-          "match": "(//!).*$",
-          "captures": {
+          "begin": "(//!)",
+          "beginCaptures": {
             "1": { "name": "punctuation.definition.comment.documentation.corex" }
-          }
+          },
+          "end": "$",
+          "patterns": [{ "include": "#doc-comment-markdown" }]
         },
         {
           "name": "comment.line.documentation.corex",
-          "match": "(///)(?!/).*$",
-          "captures": {
+          "begin": "(///)(?!/)",
+          "beginCaptures": {
             "1": { "name": "punctuation.definition.comment.documentation.corex" }
-          }
+          },
+          "end": "$",
+          "patterns": [{ "include": "#doc-comment-markdown" }]
         },
         {
           "name": "comment.line.double-slash.corex",
-          "match": "(//).*$",
-          "captures": {
+          "begin": "(//)",
+          "beginCaptures": {
             "1": { "name": "punctuation.definition.comment.corex" }
-          }
+          },
+          "end": "$",
+          "patterns": [{ "include": "#comment-inline-formatting" }]
         },
         {
           "name": "invalid.illegal.block-doc-comment.corex",
@@ -303,6 +309,156 @@
           "patterns": [{ "include": "#block-comment" }]
         },
         { "include": "#block-comment" }
+      ]
+    },
+    "comment-escapes": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.comment.corex",
+          "match": "\\\\(?:x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f_]{1,6}\\}|[ntr0\\\\'\"])"
+        }
+      ]
+    },
+    "comment-inline-formatting": {
+      "patterns": [
+        {
+          "begin": "(``)(?=(?>[^`\\r\\n]+|`(?!`))+``)",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.comment.corex" }
+          },
+          "contentName": "punctuation.definition.raw.markdown.corex",
+          "end": "(``)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.comment.corex" }
+          },
+          "patterns": [{ "include": "#comment-escapes" }]
+        },
+        {
+          "begin": "(?<!`)(`)(?!`)(?=(?>[^`\\r\\n]+)`(?!`))",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.comment.corex" }
+          },
+          "contentName": "punctuation.definition.raw.markdown.corex",
+          "end": "(`)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.comment.corex" }
+          },
+          "patterns": [{ "include": "#comment-escapes" }]
+        },
+        {
+          "match": "(\\[)((?>[^\\]\\r\\n]+))(\\]\\()((?>[^\\)\\s\\r\\n]+))(\\))",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.corex" },
+            "2": { "name": "punctuation.definition.raw.markdown.corex" },
+            "3": { "name": "punctuation.definition.comment.corex" },
+            "4": { "name": "markup.underline.link.markdown.corex" },
+            "5": { "name": "punctuation.definition.comment.corex" }
+          }
+        },
+        {
+          "name": "markup.underline.link.markdown.corex",
+          "match": "\\bhttps?://[^\\s\\)\\]>\"'`]+(?<![.,;:!?])"
+        },
+        {
+          "begin": "(?<![\\*A-Za-z0-9_])(\\*\\*\\*)(?![\\*\\s])(?=(?>[^\\*\\r\\n]+|\\*(?!\\*\\*))+\\*\\*\\*(?![\\*A-Za-z0-9_]))",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.comment.corex" }
+          },
+          "contentName": "markup.bold.markdown.corex",
+          "end": "(\\*\\*\\*)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.comment.corex" }
+          },
+          "patterns": [
+            { "include": "#comment-escapes" },
+            {
+              "name": "markup.italic.markdown.corex",
+              "match": "(?>[^\\\\\\*\\r\\n]+|\\*(?!\\*\\*))+"
+            }
+          ]
+        },
+        {
+          "match": "(?<![\\*A-Za-z0-9_])(\\*\\*)(?![\\*\\s])((?>[^\\*\\r\\n]+|\\*(?!\\*))++)(?<!\\s)(\\*\\*)(?![\\*A-Za-z0-9_])",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.corex" },
+            "2": { "name": "markup.bold.markdown.corex" },
+            "3": { "name": "punctuation.definition.comment.corex" }
+          }
+        },
+        {
+          "match": "(?<![\\*A-Za-z0-9_])(\\*)(?![\\*\\s])((?>[^\\*\\r\\n]+))(?<!\\s)(\\*)(?![\\*A-Za-z0-9_])",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.corex" },
+            "2": { "name": "markup.italic.markdown.corex" },
+            "3": { "name": "punctuation.definition.comment.corex" }
+          }
+        },
+        {
+          "begin": "(?<![_A-Za-z0-9])(___)(?![_\\s])(?=(?>[^_\\r\\n]+|_(?!__))+___(?![_A-Za-z0-9]))",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.comment.corex" }
+          },
+          "contentName": "markup.bold.markdown.corex",
+          "end": "(___)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.comment.corex" }
+          },
+          "patterns": [
+            { "include": "#comment-escapes" },
+            {
+              "name": "markup.italic.markdown.corex",
+              "match": "(?>[^\\\\_\\r\\n]+|_(?!__))+"
+            }
+          ]
+        },
+        {
+          "match": "(?<![_A-Za-z0-9])(__)(?![_\\s])((?>[^_\\r\\n]+|_(?!_))++)(?<!\\s)(__)(?![_A-Za-z0-9])",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.corex" },
+            "2": { "name": "markup.bold.markdown.corex" },
+            "3": { "name": "punctuation.definition.comment.corex" }
+          }
+        },
+        {
+          "match": "(?<![_A-Za-z0-9])(_)(?![_\\s])((?>[^_\\r\\n]+))(?<!\\s)(_)(?![_A-Za-z0-9])",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.corex" },
+            "2": { "name": "markup.italic.markdown.corex" },
+            "3": { "name": "punctuation.definition.comment.corex" }
+          }
+        },
+        {
+          "match": "(?<!~)(~~)(?![~\\s])((?>[^~\\r\\n]+|~(?!~))+)(?<!\\s)(~~)(?!~)",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.corex" },
+            "2": { "name": "markup.strikethrough.markdown.corex" },
+            "3": { "name": "punctuation.definition.comment.corex" }
+          }
+        },
+        { "include": "#comment-escapes" }
+      ]
+    },
+    "doc-comment-markdown": {
+      "patterns": [
+        {
+          "match": "\\G[ \\t]*(```+|~~~+)([A-Za-z0-9_.+-]*)[ \\t]*$",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.corex" },
+            "2": { "name": "punctuation.definition.raw.markdown.corex" }
+          }
+        },
+        {
+          "match": "\\G[ \\t]*(#{1,6})([ \\t]+[^\\r\\n]+)$",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.corex" },
+            "2": { "name": "markup.heading.markdown.corex" }
+          }
+        },
+        { "include": "#comment-inline-formatting" },
+        {
+          "name": "constant.character.escape.markdown.corex",
+          "match": "\\\\[\\`*_{}\\[\\]()#+\\-.!|~]"
+        }
       ]
     },
     "block-comment": {
@@ -482,7 +638,46 @@
           "patterns": [{ "include": "#char-escapes" }]
         },
         {
-          "comment": "Multiline interpolated UTF-8 string \"\"\"…\"\"\"",
+          "comment": "Guarded raw interpolated string f#\"…\"#",
+          "name": "string.interpolated.raw.corex",
+          "begin": "\\b(f)(#+)(\")",
+          "beginCaptures": {
+            "1": { "name": "storage.type.string.corex" },
+            "2": { "name": "punctuation.definition.string.begin.corex" },
+            "3": { "name": "punctuation.definition.string.begin.corex" }
+          },
+          "end": "(\")(\\2)|(?=$)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.corex" },
+            "2": { "name": "punctuation.definition.string.end.corex" }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.brace.corex",
+              "match": "\\{\\{|\\}\\}"
+            },
+            { "include": "#string-interpolation" }
+          ]
+        },
+        {
+          "comment": "Interpolated expression string f\"…\"",
+          "name": "string.interpolated.double.corex",
+          "begin": "\\b(f)(\")",
+          "beginCaptures": {
+            "1": { "name": "storage.type.string.corex" },
+            "2": { "name": "punctuation.definition.string.begin.corex" }
+          },
+          "end": "(\")|(?=$)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.corex" }
+          },
+          "patterns": [
+            { "include": "#string-escapes" },
+            { "include": "#string-interpolation" }
+          ]
+        },
+        {
+          "comment": "Multiline UTF-8 string \"\"\"…\"\"\"",
           "name": "string.quoted.triple.corex",
           "begin": "\"\"\"(?=[ \\t]*$)",
           "beginCaptures": {
@@ -494,11 +689,11 @@
           },
           "patterns": [
             { "include": "#string-escapes" },
-            { "include": "#string-interpolation" }
+            { "include": "#string-placeholder" }
           ]
         },
         {
-          "comment": "Single-line interpolated UTF-8 string \"…\"",
+          "comment": "Plain UTF-8 string \"…\" with operator-red {placeholder} spans",
           "name": "string.quoted.double.corex",
           "begin": "\"",
           "beginCaptures": {
@@ -510,10 +705,14 @@
           },
           "patterns": [
             { "include": "#string-escapes" },
-            { "include": "#string-interpolation" }
+            { "include": "#string-placeholder" }
           ]
         }
       ]
+    },
+    "string-placeholder": {
+      "name": "keyword.operator.placeholder.corex",
+      "match": "\\{(?!\\{)(?>[^\\{\\}\"\\\\\\r\\n]|\\\\.|\\{(?>[^\\{\\}\"\\\\\\r\\n]|\\\\.)*\\})*\\}"
     },
     "byte-escapes": {
       "patterns": [
@@ -578,11 +777,11 @@
       "contentName": "source.corex",
       "begin": "\\{",
       "beginCaptures": {
-        "0": { "name": "punctuation.definition.interpolation.begin.corex" }
+        "0": { "name": "punctuation.section.interpolation.begin.corex" }
       },
       "end": "\\}",
       "endCaptures": {
-        "0": { "name": "punctuation.definition.interpolation.end.corex" }
+        "0": { "name": "punctuation.section.interpolation.end.corex" }
       },
       "patterns": [
         {
@@ -855,7 +1054,7 @@
           "match": "\\b(let)[ \\t]+([a-z_][a-z0-9_]*)\\b",
           "captures": {
             "1": { "name": "keyword.declaration.variable.corex" },
-            "2": { "name": "variable.other.constant.corex" }
+            "2": { "name": "variable.other.readwrite.corex" }
           }
         },
         {
@@ -870,7 +1069,7 @@
           "comment": "Immutable walrus condition binding: (n: usize := expr) or (n := expr)",
           "match": "\\b([a-z_][a-z0-9_]*)(?:[ \\t]*(:)(?!=)(?=(?>(?:[^;:\\r\\n,\\(\\)\\{\\}]|\\([^;\\r\\n\\(\\)]*\\))*):=)|(?=[ \\t]*:=))",
           "captures": {
-            "1": { "name": "variable.other.constant.corex" },
+            "1": { "name": "variable.other.readwrite.corex" },
             "2": { "name": "punctuation.separator.type.corex" }
           }
         }
@@ -1139,7 +1338,7 @@
         {
           "comment": "Built-in global prelude traits",
           "name": "entity.name.type.interface.corex",
-          "match": "\\b(?:AutoDrop|Clone|Debug|Default|Display|Drop|Eq|From|FromError|Future|Hash|Hasher|Iterator|Ord|Send|Sync|TrivialDrop)\\b"
+          "match": "\\b(?:AutoDrop|Clone|Debug|Default|Display|Drop|From|FromError|Future|Hash|Hasher|Iterator|Send|Sync|TrivialDrop)\\b"
         },
         {
           "comment": "Contextual dot-variant (.Some, .None, .Ok, .Err, .SeqCst)",

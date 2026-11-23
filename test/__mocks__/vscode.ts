@@ -376,8 +376,8 @@ export interface MockStatusBarItem {
   readonly show: () => void;
   /** Status-bar label text (e.g., `'$(check) CoreX'`). */
   text: string;
-  /** Hover tooltip string. */
-  tooltip?: string;
+  /** Hover tooltip string or trusted `MarkdownString`. */
+  tooltip?: string | MockMarkdownString;
 }
 
 /** Mock VS Code diagnostic collection keyed by canonical URI string. */
@@ -754,7 +754,10 @@ const errorMessagesState: RecordedToastMessage[] = [];
 /** Recorded `window.showWarningMessage` calls. */
 const warningMessagesState: RecordedToastMessage[] = [];
 
-/** Optional scripted button choice returned by the next `showErrorMessage` / `showWarningMessage`. */
+/** Recorded QuickPick item arrays passed to `window.showQuickPick`. */
+const quickPicksState: (readonly unknown[])[] = [];
+
+/** Optional scripted button choice returned by the next `showErrorMessage` / `showWarningMessage` / `showQuickPick`. */
 let nextDialogChoiceState: string | undefined = undefined;
 
 /** Active language feature providers registered via `vscode.languages`. */
@@ -1220,6 +1223,41 @@ function registerProviderInBucket(bucket: unknown[], provider: unknown): MockDis
 /** Mutable text storage keyed by `MockTextDocument` reference. */
 const documentBuffers = new WeakMap<MockTextDocument, string>();
 
+/**
+ * Mutates `configValuesState` and optionally broadcasts `onDidChangeConfiguration`.
+ *
+ * @param values          Map of full keys (`'corex.enable'`) or short keys (`'enable'`) to values.
+ * @param isFiringEvent   Whether to emit `onDidChangeConfiguration`.
+ */
+function applyMockConfigValues(
+  values: Readonly<Record<string, unknown>>,
+  isFiringEvent: boolean
+): void {
+  const changedFullKeys: string[] = [];
+  for (const [rawKey, val] of Object.entries(values)) {
+    const fullKey =
+      rawKey.includes('.') && rawKey.startsWith('corex.') ? rawKey : `corex.${rawKey}`;
+    changedFullKeys.push(fullKey);
+    if (val === undefined) {
+      configValuesState.delete(fullKey);
+    } else {
+      configValuesState.set(fullKey, val);
+    }
+  }
+  if (isFiringEvent) {
+    configEmitter.fire({
+      affectsConfiguration(section: string): boolean {
+        for (const fullKey of changedFullKeys) {
+          if (fullKey === section || fullKey.startsWith(`${section}.`)) {
+            return true;
+          }
+        }
+        return false;
+      },
+    });
+  }
+}
+
 // ------------------------------------- PUBLIC API --------------------------------------
 
 // ------------------- Constructible Exports --------------------
@@ -1381,6 +1419,10 @@ export const workspace = {
       has(key: string): boolean {
         return configValuesState.has(`${prefix}${key}`);
       },
+      update(key: string, value: unknown): Promise<void> {
+        applyMockConfigValues({ [`${prefix}${key}`]: value }, true);
+        return Promise.resolve();
+      },
     };
   },
   get isTrusted(): boolean {
@@ -1473,6 +1515,20 @@ export const window = {
     const chosen = nextDialogChoiceState;
     nextDialogChoiceState = undefined;
     return Promise.resolve(chosen);
+  },
+  showQuickPick<T extends { readonly label: string }>(items: readonly T[]): Promise<T | undefined> {
+    quickPicksState.push(items);
+    const chosenLabel = nextDialogChoiceState;
+    nextDialogChoiceState = undefined;
+    if (chosenLabel === undefined) {
+      return Promise.resolve(undefined);
+    }
+    for (const item of items) {
+      if (item.label === chosenLabel || item.label.includes(chosenLabel)) {
+        return Promise.resolve(item);
+      }
+    }
+    return Promise.resolve(undefined);
   },
   showWarningMessage(message: string, ...items: string[]): Promise<string | undefined> {
     warningMessagesState.push({ items, message });
@@ -1622,6 +1678,7 @@ export function resetVscodeMock(): void {
   watchersState.length = 0;
   errorMessagesState.length = 0;
   warningMessagesState.length = 0;
+  quickPicksState.length = 0;
   nextDialogChoiceState = undefined;
   for (const key of Object.keys(providerRegistryState) as (keyof MockProviderRegistry)[]) {
     providerRegistryState[key].length = 0;
@@ -1652,29 +1709,7 @@ export function setWorkspaceConfig(
   values: Readonly<Record<string, unknown>>,
   isFiringEvent = false
 ): void {
-  const changedFullKeys: string[] = [];
-  for (const [rawKey, val] of Object.entries(values)) {
-    const fullKey =
-      rawKey.includes('.') && rawKey.startsWith('corex.') ? rawKey : `corex.${rawKey}`;
-    changedFullKeys.push(fullKey);
-    if (val === undefined) {
-      configValuesState.delete(fullKey);
-    } else {
-      configValuesState.set(fullKey, val);
-    }
-  }
-  if (isFiringEvent) {
-    configEmitter.fire({
-      affectsConfiguration(section: string): boolean {
-        for (const fullKey of changedFullKeys) {
-          if (fullKey === section || fullKey.startsWith(`${section}.`)) {
-            return true;
-          }
-        }
-        return false;
-      },
-    });
-  }
+  applyMockConfigValues(values, isFiringEvent);
 }
 
 /**
@@ -1845,6 +1880,7 @@ export function getMockState() {
     errorMessages: errorMessagesState,
     outputChannels: outputChannelsState,
     providers: providerRegistryState,
+    quickPicks: quickPicksState,
     statusBarItems: statusBarItemsState,
     warningMessages: warningMessagesState,
     watchers: watchersState,

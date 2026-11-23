@@ -138,6 +138,21 @@
         "command": "corex.showOutputChannel",
         "category": "CoreX",
         "title": "Show Output Channel"
+      },
+      {
+        "command": "corex.showStatusMenu",
+        "category": "CoreX",
+        "title": "Show Status Bar Menu"
+      },
+      {
+        "command": "corex.stopServer",
+        "category": "CoreX",
+        "title": "Stop Language Server"
+      },
+      {
+        "command": "corex.toggleInlayHints",
+        "category": "CoreX",
+        "title": "Toggle Inlay Hints"
       }
     ],
     "configuration": {

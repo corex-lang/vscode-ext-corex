@@ -10,16 +10,12 @@
 import { window } from 'vscode';
 import type { OutputChannel } from 'vscode';
 
+export { workspace as vsWorkspace } from 'vscode';
+
 // --------------------------------------- CONSTS ----------------------------------------
 
-/** Canonical VS Code output channel display name. */
-const OUTPUT_CHANNEL_NAME = 'CoreX';
-
-/** Maximum character length appended for a single error stack or detail suffix (chars). */
-const MAX_ERROR_DETAIL_LENGTH = 4096;
-
-/** Maximum character length appended for a single verbose JSON-RPC trace payload (chars). */
-const MAX_TRACE_PAYLOAD_LENGTH = 16_384;
+/** Shared mangleable alias for `vscode.window`. */
+export const vsWindow = window;
 
 // -------------------------------------- INTERNALS --------------------------------------
 
@@ -28,7 +24,7 @@ let outputChannel: OutputChannel | undefined = undefined;
 
 /** Returns the `CoreX` output channel, creating it lazily on first access. */
 function ensureChannel(): OutputChannel {
-  outputChannel ??= window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+  outputChannel ??= vsWindow.createOutputChannel('CoreX');
   return outputChannel;
 }
 
@@ -40,12 +36,7 @@ function ensureChannel(): OutputChannel {
  * @param detail      Optional caught error or JSON-RPC trace payload.
  * @param maxLength   Maximum UTF-16 code-unit length for `detail`.
  */
-function appendLogLine(
-  glyph: string,
-  message: string,
-  detail?: unknown,
-  maxLength = MAX_ERROR_DETAIL_LENGTH
-): void {
+function appendLogLine(glyph: string, message: string, detail?: unknown, maxLength = 4096): void {
   let suffix = '';
   if (detail !== undefined && detail !== null) {
     const text = detail instanceof Error ? (detail.stack ?? detail.message) : String(detail);
@@ -107,12 +98,7 @@ export function logError(message: string, error?: unknown): void {
  * @param payload     Optional serialized JSON body when `corex.trace.server` is `'verbose'`.
  */
 export function logTrace(direction: 'send' | 'receive', summary: string, payload?: string): void {
-  appendLogLine(
-    `▸ ${direction === 'send' ? '->' : '<-'}`,
-    summary,
-    payload,
-    MAX_TRACE_PAYLOAD_LENGTH
-  );
+  appendLogLine(`▸ ${direction === 'send' ? '->' : '<-'}`, summary, payload, 16_384);
 }
 
 /** Disposes the `CoreX` output channel if it was initialized. */

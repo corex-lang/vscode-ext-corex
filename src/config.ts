@@ -7,7 +7,6 @@
  * Caches the resolved snapshot until explicitly invalidated on `onDidChangeConfiguration`.
  */
 
-import { workspace } from 'vscode';
 import { isStr } from '@/client';
 import type {
   ExtensionConfig,
@@ -15,11 +14,18 @@ import type {
   RawExtensionConfigInput,
   TraceServerMode,
 } from '@/types';
+import { vsWorkspace } from '@/utils/logger';
 
 // --------------------------------------- CONSTS ----------------------------------------
 
 /** Configuration namespace prefix in `package.json`. */
 export const COREX_CONFIG_SECTION = 'corex';
+
+/** Setting key for explicit `corex` binary path under `corex.*`. */
+export const EXEC_PATH_KEY = 'executablePath';
+
+/** Setting key for editor inlay hints under `corex.*`. */
+export const INLAY_HINTS_KEY = 'inlayHints.enable';
 
 /** Canonical default values matching `package.json` `contributes.configuration`. */
 export const DEFAULT_EXTENSION_CONFIG: ExtensionConfig = {
@@ -37,45 +43,28 @@ const RESTART_KEYS = 'executablePath,internalCore,isEnabled,isLspEnabled'.split(
   ','
 ) as readonly (keyof ExtensionConfig)[];
 
-/** $O(1)$ lookup set of valid `corex.internalCore` enum literals (sorted alphabetically). */
-const VALID_INTERNAL_CORE_MODES: ReadonlySet<string> = new Set('always,auto,never'.split(','));
-
-/** $O(1)$ lookup set of valid `corex.trace.server` enum literals (sorted alphabetically). */
-const VALID_TRACE_SERVER_MODES: ReadonlySet<string> = new Set('messages,off,verbose'.split(','));
-
 // -------------------------------------- INTERNALS --------------------------------------
 
 /** Cached configuration snapshot cleared on `invalidateConfigCache()`. */
 let cachedConfig: ExtensionConfig | undefined = undefined;
 
 /**
- * Narrows an untrusted configuration value to a `boolean` with default `true`.
+ * Builds an $O(1)$ `Set`-backed string literal type guard from a comma-separated list.
  *
- * @param rawValue   Untrusted value from `WorkspaceConfiguration.get`.
+ * @param csv   Comma-separated valid enum values.
  */
-function isTrueOrDefault(rawValue: unknown): boolean {
-  return typeof rawValue === 'boolean' ? rawValue : true;
+function buildEnumGuard<T extends string>(csv: string): (value: unknown) => value is T {
+  const validSet: ReadonlySet<string> = new Set(csv.split(','));
+  return (value): value is T => isStr(value) && validSet.has(value);
 }
 
 // ------------------------------------- PUBLIC API --------------------------------------
 
-/**
- * Type guard checking whether `value` is a valid `InternalCoreMode` in $O(1)$ time.
- *
- * @param value   Untrusted setting value to test.
- */
-export function isInternalCoreMode(value: unknown): value is InternalCoreMode {
-  return isStr(value) && VALID_INTERNAL_CORE_MODES.has(value);
-}
+/** Type guard checking whether `value` is a valid `InternalCoreMode` in $O(1)$ time. */
+export const isInternalCoreMode = buildEnumGuard<InternalCoreMode>('always,auto,never');
 
-/**
- * Type guard checking whether `value` is a valid `TraceServerMode` in $O(1)$ time.
- *
- * @param value   Untrusted setting value to test.
- */
-export function isTraceServerMode(value: unknown): value is TraceServerMode {
-  return isStr(value) && VALID_TRACE_SERVER_MODES.has(value);
-}
+/** Type guard checking whether `value` is a valid `TraceServerMode` in $O(1)$ time. */
+export const isTraceServerMode = buildEnumGuard<TraceServerMode>('messages,off,verbose');
 
 /**
  * Validates and normalizes raw untrusted setting values into a typed `ExtensionConfig`.
@@ -86,10 +75,10 @@ export function parseExtensionConfig(rawInput: RawExtensionConfigInput): Extensi
   return {
     executablePath: isStr(rawInput.executablePath) ? rawInput.executablePath : '',
     internalCore: isInternalCoreMode(rawInput.internalCore) ? rawInput.internalCore : 'auto',
-    isEnabled: isTrueOrDefault(rawInput.enable),
-    isFormatEnabled: isTrueOrDefault(rawInput.formatEnable),
+    isEnabled: rawInput.enable !== false,
+    isFormatEnabled: rawInput.formatEnable !== false,
     isInlayHintsEnabled: rawInput.inlayHintsEnable === true,
-    isLspEnabled: isTrueOrDefault(rawInput.lspEnable),
+    isLspEnabled: rawInput.lspEnable !== false,
     traceServer: isTraceServerMode(rawInput.traceServer) ? rawInput.traceServer : 'off',
   };
 }
@@ -101,21 +90,22 @@ export function invalidateConfigCache(): void {
 
 /** Reads, validates, and caches all `corex.*` workspace configuration settings. */
 export function readExtensionConfig(): ExtensionConfig {
-  if (cachedConfig === undefined) {
-    const configView = workspace.getConfiguration(COREX_CONFIG_SECTION);
-    const rawExec = configView.get('executablePath');
-    const rawMode = configView.get('internalCore');
-    const rawTrace = configView.get('trace.server');
-    cachedConfig = {
-      executablePath: isStr(rawExec) ? rawExec : '',
-      internalCore: isInternalCoreMode(rawMode) ? rawMode : 'auto',
-      isEnabled: isTrueOrDefault(configView.get('enable')),
-      isFormatEnabled: isTrueOrDefault(configView.get('format.enable')),
-      isInlayHintsEnabled: configView.get('inlayHints.enable') === true,
-      isLspEnabled: isTrueOrDefault(configView.get('lsp.enable')),
-      traceServer: isTraceServerMode(rawTrace) ? rawTrace : 'off',
-    };
+  if (cachedConfig !== undefined) {
+    return cachedConfig;
   }
+  const configView = vsWorkspace.getConfiguration(COREX_CONFIG_SECTION);
+  const rawExec = configView.get(EXEC_PATH_KEY);
+  const rawMode = configView.get('internalCore');
+  const rawTrace = configView.get('trace.server');
+  cachedConfig = {
+    executablePath: isStr(rawExec) ? rawExec : '',
+    internalCore: isInternalCoreMode(rawMode) ? rawMode : 'auto',
+    isEnabled: configView.get('enable') !== false,
+    isFormatEnabled: configView.get('format.enable') !== false,
+    isInlayHintsEnabled: configView.get(INLAY_HINTS_KEY) === true,
+    isLspEnabled: configView.get('lsp.enable') !== false,
+    traceServer: isTraceServerMode(rawTrace) ? rawTrace : 'off',
+  };
   return cachedConfig;
 }
 

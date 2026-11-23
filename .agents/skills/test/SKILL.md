@@ -37,7 +37,7 @@ Tests run headlessly in Node via **vitest** (`vitest.config.mts`), mapping `@/*`
 Every non-whitespace token produced by `syntaxes/corex.tmLanguage.json` (and embedded `cx` blocks via `syntaxes/corex.markdown.tmLanguage.json`) across inline fixtures, `../corex/core/**/*.cx`, and `../corex/docs/COMPARISONS.md` must satisfy three strict invariants:
 
 1.  **Non-Root Scope Depth:** `token.scopes.length > 1` – no non-whitespace token may fall through to bare `source.corex`.
-2.  **Specific Innermost Lexical Scope:** The innermost scope (`token.scopes[token.scopes.length - 1]`) must never be a bare container scope (`source.*` or `meta.*`) – every keyword, identifier, literal, annotation, operator, and delimiter inside a `meta.*` region must carry an explicit leaf scope (`keyword.*`, `storage.*`, `entity.*`, `constant.*`, `string.*`, `variable.*`, `support.*`, `comment.*`, or `punctuation.*`).
+2.  **Specific Innermost Lexical Scope:** The innermost scope (`token.scopes[token.scopes.length - 1]`) must never be a bare container scope (`source.*` or `meta.*`) – every keyword, identifier, literal, annotation, operator, docstring Markdown span, and delimiter inside a `meta.*` region must carry an explicit leaf scope (`keyword.*`, `storage.*`, `entity.*`, `constant.*`, `string.*`, `variable.*`, `support.*`, `comment.*`, `markup.*`, or `punctuation.*`).
 3.  **Zero Unintended `invalid.*` Scopes:** Valid CoreX v1.0 code must emit zero `invalid.*` scopes; `invalid.illegal.*` is permitted strictly in dedicated negative-test snippets verifying malformed literal/escape highlighting.
 
 ## 4. Headless `corex lsp` & `corex fmt` Integration

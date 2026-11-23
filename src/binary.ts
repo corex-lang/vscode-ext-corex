@@ -8,8 +8,8 @@
  * enforces `<= 32` ancestor-hop caps, and fails closed when `corex.executablePath` is missing.
  */
 
-import { statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { statSync as rawStatSync } from 'node:fs';
+import { homedir as rawHomedir, tmpdir as rawTmpdir } from 'node:os';
 // oxlint-disable-next-line unicorn/import-style -- named imports avoid esbuild CJS __toESM wrapper overhead
 import { dirname as rawDirname, join as rawJoin, resolve as rawResolve } from 'node:path';
 import type {
@@ -33,6 +33,12 @@ export const pathJoin = rawJoin;
 /** Canonical path resolver binding `path.resolve`. */
 const resolvePath = rawResolve;
 
+/** Local alias binding `fs.statSync`. */
+const hostStatSync = rawStatSync;
+
+/** Local alias binding `os.homedir`. */
+const hostHomedir = rawHomedir;
+
 /** Whether the current Node host OS is Windows (`'win32'`). */
 const IS_HOST_WIN = process.platform === 'win32';
 
@@ -43,9 +49,6 @@ export const MAX_ANCESTOR_HOPS = 32;
 const BUILD_SUBDIRS = 'build/stage0,zig-out/bin,build,build/stage3,build/stage2,build/stage1'.split(
   ','
 );
-
-/** Default Windows native executable extensions checked when `env.PATHEXT` is unset. */
-const DEFAULT_WINDOWS_PATHEXT = '.EXE;.COM';
 
 /** VS Code workspace folder variable token. */
 // oxlint-disable-next-line no-template-curly-in-string -- VS Code setting variable token
@@ -76,7 +79,7 @@ const PATH_SEP_RX = /[\\/:]/;
  */
 function statHostPath(candidatePath: string): BinaryFileStat | null {
   try {
-    return statSync(candidatePath);
+    return hostStatSync(candidatePath);
   } catch {
     return null;
   }
@@ -89,8 +92,8 @@ function statHostPath(candidatePath: string): BinaryFileStat | null {
  */
 function stripOuterQuotes(rawValue: string): string {
   const trimmed = rawValue.trim();
-  const quote = trimmed.charAt(0);
-  return trimmed.length >= 2 && (quote === '"' || quote === "'") && trimmed.endsWith(quote)
+  const [quote] = trimmed;
+  return (quote === '"' || quote === "'") && trimmed.length > 1 && trimmed.endsWith(quote)
     ? trimmed.slice(1, -1).trim()
     : trimmed;
 }
@@ -103,23 +106,23 @@ function stripOuterQuotes(rawValue: string): string {
  */
 function createFoundResult(
   binaryPath: string,
-  source: BinaryResolutionSource
+  source: BinaryResolutionSource = 'configured-path'
 ): BinaryResolutionFound {
   return { binaryPath, isFound: true, source };
 }
 
 /**
- * Constructs a fail-closed `BinaryResolutionMissing` for an explicitly configured path.
+ * Constructs a `BinaryResolutionMissing` result (`configured-path-not-found` when a candidate is given).
  *
- * @param configuredCandidate   Expanded explicit candidate path that failed validation.
+ * @param configuredCandidate   Optional explicit candidate path that failed validation.
  */
-function createMissingResult(configuredCandidate: string): BinaryResolutionMissing {
+function createMissingResult(configuredCandidate?: string): BinaryResolutionMissing {
   return {
     binaryPath: null,
-    configuredCandidate,
+    ...(configuredCandidate !== undefined && { configuredCandidate }),
     isFound: false,
-    reason: 'configured-path-not-found',
-  };
+    reason: configuredCandidate === undefined ? 'not-found' : 'configured-path-not-found',
+  } as BinaryResolutionMissing;
 }
 
 /**
@@ -132,120 +135,26 @@ function collectAncestorDirs(startDirs: readonly string[], isWindows: boolean): 
   const visited = new Set<string>();
   const dirs: string[] = [];
   for (const rawStart of startDirs) {
-    if (rawStart) {
-      let current = resolvePath(rawStart);
-      for (let hop = 0; hop <= MAX_ANCESTOR_HOPS; hop += 1) {
-        const key = isWindows ? current.toLowerCase() : current;
-        if (!visited.has(key)) {
-          visited.add(key);
-          dirs.push(current);
-        }
-        const parent = pathDirname(current);
-        if (parent === current) {
-          break;
-        }
-        current = parent;
+    let current = rawStart && resolvePath(rawStart);
+    for (let hop = 0; current && hop <= MAX_ANCESTOR_HOPS; hop += 1) {
+      const key = isWindows ? current.toLowerCase() : current;
+      if (!visited.has(key)) {
+        visited.add(key);
+        dirs.push(current);
       }
+      const parent = pathDirname(current);
+      current = parent === current ? '' : parent;
     }
   }
   return dirs;
 }
 
-/**
- * Searches `PATH` (`env.PATH ?? env.Path`) for an executable matching `commandName`.
- *
- * @param commandName   Bare command name (e.g., `'corex'`).
- * @param env           Environment map containing `PATH` / `Path` and `PATHEXT`.
- * @param isWindows     Whether target OS is `'win32'`.
- * @param isExecFile    Executable file predicate.
- */
-function searchPathForCommand(
-  commandName: string,
-  env: Readonly<Record<string, string | undefined>>,
-  isWindows: boolean,
-  isExecFile: (filePath: string) => boolean
-): string | null {
-  const rawPath = env.PATH ?? env.Path;
-  if (!rawPath) {
-    return null;
-  }
-  const suffixes = new Set<string>();
-  if (isWindows && !WIN_NATIVE_EXT_RX.test(commandName)) {
-    for (const part of (env.PATHEXT ?? env.Pathext ?? DEFAULT_WINDOWS_PATHEXT).split(';')) {
-      const cleanExt = part.trim().toLowerCase();
-      const dottedExt = cleanExt.startsWith('.') ? cleanExt : `.${cleanExt}`;
-      if (WIN_NATIVE_EXT_RX.test(dottedExt)) {
-        suffixes.add(dottedExt);
-      }
-    }
-    suffixes.add('.exe');
-  }
-  suffixes.add('');
-
-  for (const rawDir of rawPath.split(isWindows ? ';' : ':')) {
-    const cleanDir = stripOuterQuotes(rawDir);
-    if (cleanDir) {
-      for (const suffix of suffixes) {
-        const fullPath = pathJoin(cleanDir, commandName + suffix);
-        if (isExecFile(fullPath)) {
-          return resolvePath(fullPath);
-        }
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Resolves an explicitly configured `corex.executablePath`, failing closed when missing.
- *
- * @param unquoted           Trimmed and unquoted `corex.executablePath` string.
- * @param primaryWorkspace   First workspace root directory, if any.
- * @param homeDir            User home directory.
- * @param env                Environment variable map.
- * @param isWindows          Whether target OS is `'win32'`.
- * @param isExecFile         Executable file predicate.
- */
-function resolveConfiguredBinary(
-  unquoted: string,
-  primaryWorkspace: string | undefined,
-  homeDir: string,
-  env: Readonly<Record<string, string | undefined>>,
-  isWindows: boolean,
-  isExecFile: (filePath: string) => boolean
-): BinaryResolutionResult {
-  const resolvedWorkspace = primaryWorkspace ? resolvePath(primaryWorkspace) : undefined;
-  let expanded = unquoted;
-  if (TILDE_PREFIX_RX.test(expanded)) {
-    if (!homeDir) {
-      return createMissingResult(unquoted);
-    }
-    expanded = pathJoin(homeDir, expanded.slice(2));
-  }
-  if (expanded.includes(WORKSPACE_FOLDER_TOKEN)) {
-    if (!resolvedWorkspace) {
-      return createMissingResult(unquoted);
-    }
-    expanded = expanded.replaceAll(WORKSPACE_FOLDER_TOKEN, resolvedWorkspace);
-  }
-
-  if (!PATH_SEP_RX.test(expanded)) {
-    const fromPath = searchPathForCommand(expanded, env, isWindows, isExecFile);
-    return fromPath
-      ? createFoundResult(fromPath, 'configured-path')
-      : createMissingResult(expanded);
-  } else if (!resolvedWorkspace && !ABS_PATH_PREFIX_RX.test(expanded)) {
-    return createMissingResult(expanded);
-  }
-
-  const candidate = resolvePath(resolvedWorkspace ?? '', expanded);
-  const fullPath = isWindows && !WIN_NATIVE_EXT_RX.test(candidate) ? `${candidate}.exe` : candidate;
-  return isExecFile(fullPath)
-    ? createFoundResult(fullPath, 'configured-path')
-    : createMissingResult(candidate);
-}
-
 // ------------------------------------- PUBLIC API --------------------------------------
+
+/** Returns the host OS temporary directory path. */
+export function getHostTmpdir(): string {
+  return rawTmpdir();
+}
 
 /**
  * Returns `true` when `dirPath` is the CoreX compiler/stdlib repository root (`core/root.cx` + `stage0/` or `compiler/`).
@@ -306,8 +215,8 @@ export function resolveCorexBinary(
   configuredPath: string,
   probeEnv: BinaryProbeEnv = { workspaceDirs: [] }
 ): BinaryResolutionResult {
-  const { env = process.env, homeDir = homedir(), statFn, workspaceDirs } = probeEnv;
-  const isWindows = probeEnv.platform ? probeEnv.platform === 'win32' : IS_HOST_WIN;
+  const { env = process.env, homeDir = hostHomedir(), statFn, workspaceDirs } = probeEnv;
+  const isWindows = (probeEnv.platform ?? process.platform) === 'win32';
   const hasPosixBits = !isWindows && (statFn !== undefined || !IS_HOST_WIN);
   const statLookup = statFn ?? statHostPath;
 
@@ -315,32 +224,82 @@ export function resolveCorexBinary(
   function isExecFile(filePath: string): boolean {
     const stat = (!isWindows || WIN_NATIVE_EXT_RX.test(filePath)) && statLookup(filePath);
     // oxlint-disable-next-line no-bitwise -- POSIX execute-permission bitmask check
-    return Boolean(stat && stat.isFile() && (!hasPosixBits || (stat.mode & 0o111) !== 0));
+    return Boolean(stat && stat.isFile() && (!hasPosixBits || stat.mode & 0o111));
+  }
+
+  /** Searches `PATH` (`env.PATH ?? env.Path`) for an executable matching `commandName`. */
+  function searchPath(commandName: string): string | null {
+    const rawPath = env.PATH ?? env.Path;
+    if (!rawPath) {
+      return null;
+    }
+    const suffixes = new Set<string>();
+    if (isWindows && !WIN_NATIVE_EXT_RX.test(commandName)) {
+      for (const part of (env.PATHEXT ?? env.Pathext ?? '.exe;.com').split(';')) {
+        const dottedExt = part.trim().toLowerCase().replace(/^\.?/, '.');
+        if (WIN_NATIVE_EXT_RX.test(dottedExt)) {
+          suffixes.add(dottedExt);
+        }
+      }
+      suffixes.add('.exe');
+    }
+    suffixes.add('');
+    for (const rawDir of rawPath.split(isWindows ? ';' : ':')) {
+      const cleanDir = stripOuterQuotes(rawDir);
+      for (const suffix of cleanDir ? suffixes : []) {
+        const fullPath = resolvePath(cleanDir, commandName + suffix);
+        if (isExecFile(fullPath)) {
+          return fullPath;
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Resolves an explicitly configured `corex.executablePath`, failing closed when missing. */
+  function resolveConfigured(unquoted: string): BinaryResolutionResult {
+    const resolvedWorkspace = workspaceDirs[0] ? resolvePath(workspaceDirs[0]) : undefined;
+    let expanded = unquoted;
+    if (TILDE_PREFIX_RX.test(expanded)) {
+      if (!homeDir) {
+        return createMissingResult(unquoted);
+      }
+      expanded = pathJoin(homeDir, expanded.slice(2));
+    }
+    if (expanded.includes(WORKSPACE_FOLDER_TOKEN)) {
+      if (!resolvedWorkspace) {
+        return createMissingResult(unquoted);
+      }
+      expanded = expanded.replaceAll(WORKSPACE_FOLDER_TOKEN, resolvedWorkspace);
+    }
+    if (!PATH_SEP_RX.test(expanded)) {
+      const fromPath = searchPath(expanded);
+      return fromPath ? createFoundResult(fromPath) : createMissingResult(expanded);
+    } else if (!resolvedWorkspace && !ABS_PATH_PREFIX_RX.test(expanded)) {
+      return createMissingResult(expanded);
+    }
+    const candidate = resolvePath(resolvedWorkspace ?? '', expanded);
+    const fullPath =
+      isWindows && !WIN_NATIVE_EXT_RX.test(candidate) ? `${candidate}.exe` : candidate;
+    return isExecFile(fullPath) ? createFoundResult(fullPath) : createMissingResult(candidate);
   }
 
   const unquoted = stripOuterQuotes(configuredPath);
   if (unquoted) {
-    return resolveConfiguredBinary(unquoted, workspaceDirs[0], homeDir, env, isWindows, isExecFile);
+    return resolveConfigured(unquoted);
   }
 
   const binaryName = isWindows ? 'corex.exe' : 'corex';
-  const siblingSeeds: string[] = [];
-  for (const workspaceDir of workspaceDirs) {
-    if (workspaceDir) {
-      siblingSeeds.push(resolvePath(workspaceDir, '..', 'corex'));
-    }
-  }
-
-  for (const [roots, subDirs, source] of [
-    [collectAncestorDirs(workspaceDirs, isWindows), BUILD_SUBDIRS, 'workspace-build'],
-    [siblingSeeds, BUILD_SUBDIRS, 'sibling-corex'],
-    [env.COREX_HOME ? [stripOuterQuotes(env.COREX_HOME)] : [], ['bin'], 'corex-home'],
-    [[homeDir], ['.corex/bin'], 'user-home'],
+  for (const [roots, prefix, subDirs, source] of [
+    [collectAncestorDirs(workspaceDirs, isWindows), '', BUILD_SUBDIRS, 'workspace-build'],
+    [workspaceDirs, '../corex', BUILD_SUBDIRS, 'sibling-corex'],
+    [env.COREX_HOME ? [stripOuterQuotes(env.COREX_HOME)] : [], '', ['bin'], 'corex-home'],
+    [[homeDir], '', ['.corex/bin'], 'user-home'],
   ] as const) {
     for (const rootDir of roots) {
       if (rootDir) {
         for (const subDir of subDirs) {
-          const candidate = resolvePath(rootDir, subDir, binaryName);
+          const candidate = resolvePath(rootDir, prefix, subDir, binaryName);
           if (isExecFile(candidate)) {
             return createFoundResult(candidate, source);
           }
@@ -349,8 +308,6 @@ export function resolveCorexBinary(
     }
   }
 
-  const pathMatch = searchPathForCommand('corex', env, isWindows, isExecFile);
-  return pathMatch
-    ? createFoundResult(pathMatch, 'path')
-    : { binaryPath: null, isFound: false, reason: 'not-found' };
+  const pathMatch = searchPath('corex');
+  return pathMatch ? createFoundResult(pathMatch, 'path') : createMissingResult();
 }
