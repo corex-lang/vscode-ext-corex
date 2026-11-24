@@ -13,7 +13,7 @@ Tests run headlessly in Node via **vitest** (`vitest.config.mts`), mapping `@/*`
 
 | File | Purpose |
 | :--- | :--- |
-| `test/grammar.test.ts` | `vscode-textmate` + `vscode-oniguruma` scope tests covering all `DR-22` tokens/keywords/primitives, Markdown `cx` codeblock injection, `../corex/core/**/*.cx`, and `../corex/docs/COMPARISONS.md` showcases. |
+| `test/grammar.test.ts` | `vscode-textmate` + `vscode-oniguruma` scope tests covering all `DR-22`–`DR-24` tokens/keywords/primitives, Markdown `cx` codeblock injection, `../corex/core/**/*.cx`, `../corex/stdlib/cx/**/*.cx`, and `../corex/docs/COMPARISONS.md` showcases. |
 | `test/framing.test.ts` | JSON-RPC 2.0 `Content-Length` framing parser and serializer tests (chunk fragmentation, multi-byte UTF-8, `LF`/`CRLF` headers, `8 KiB` header cap, `16 MiB` payload cap, malformed header recovery). |
 | `test/binary.test.ts` | `corex` executable discovery (`corex.executablePath`, workspace `build/stage0/corex(.exe)` and `build/corex(.exe)` auto-detection, `PATH` lookup, Workspace Trust gating, `--internal-core` detection). |
 | `test/config.test.ts` | Typed configuration reader, default values, and hot-reload change detection across all `corex.*` settings. |

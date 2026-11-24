@@ -41,7 +41,7 @@ Syntax highlighting is active immediately. For live diagnostics, IntelliSense, n
 
 | Feature | Description |
 | :------ | :---------- |
-| **Syntax Highlighting** | Full highlighting for `.cx` files and scripts, covering types, ownership modifiers, `@attributes`, string interpolations (`{val:#06x}`, `{expr=}`), raw and multiline strings, and nested `/* … */` comments. |
+| **Syntax Highlighting** | Full highlighting for `.cx` files and scripts, covering types, ownership modifiers, `@attributes`, `f"…"` / `f#"…"#` string interpolations (`{val:#06x}`, `{expr=}`), `{placeholder}` template spans, raw and multiline `"<newline> … "` strings (with strip-margin guides), and `/#` / `/\|` docstrings. |
 | **Markdown Code Blocks** | Highlights fenced ```` ```cx ```` and ```` ```corex ```` code blocks inside Markdown files, previews, and hover documentation. |
 | **Live Diagnostics** | Instant type, borrow, ownership, bounds, and `@no_alloc` / `@no_panic` / `@max_stack` contract feedback with one-click quick fixes. |
 | **IntelliSense & Navigation** | Auto-completion, signature help, go-to-definition, find-references, symbol search, safe cross-file rename, and rich hover cards. |

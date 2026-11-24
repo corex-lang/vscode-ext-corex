@@ -92,7 +92,10 @@
       {
         "language": "corex",
         "scopes": {
-          "comment.documentation": ["comment.line.documentation.corex"],
+          "comment.documentation": [
+            "comment.line.documentation.corex",
+            "comment.line.documentation.module.corex"
+          ],
           "decorator.attribute": [
             "storage.type.annotation.corex",
             "punctuation.definition.annotation.corex"

@@ -60,12 +60,13 @@ import type {
   SymbolKind,
   SymbolTag,
   TextDocument,
+  TextEditor,
+  TextEditorDecorationType,
 } from 'vscode';
-import { isInternalCoreEnabled, pathDirname, resolveCorexBinary } from '@/binary';
+import { isInternalCoreEnabled, pathDirname, resolveCorexBinary, splitCsv } from '@/binary';
 import {
   assignProps,
   clearTimer,
-  computeMinimalUtf16Edit,
   hasArrayProp,
   INTERNAL_CORE_FLAG,
   isArray,
@@ -91,8 +92,6 @@ import {
   readExtensionConfig,
 } from '@/config';
 import type {
-  BinaryResolutionMissing,
-  ExtensionConfig,
   LspClientSession,
   LspCodeAction,
   LspCompletionItem,
@@ -100,7 +99,6 @@ import type {
   LspDocumentHighlight,
   LspDocumentSymbol,
   LspFileChangeType,
-  LspFileEvent,
   LspInlayHint,
   LspLocation,
   LspPosition,
@@ -139,14 +137,20 @@ interface StatusMenuEntry extends QuickPickItem {
 
 // --------------------------------------- CONSTS ----------------------------------------
 
-/** Local alias binding `languages` to a mangleable identifier. */
-const vsLanguages = languages;
+/** Local alias binding `MarkdownString` to a mangleable identifier. */
+const VsMarkdown = MarkdownString;
+
+/** Local alias binding `Range` to a mangleable identifier. */
+const VsRange = Range;
 
 /** Local alias binding `TextEdit` to a mangleable identifier. */
 const VsTextEdit = TextEdit;
 
-/** Local alias binding `MarkdownString` to a mangleable identifier. */
-const VsMarkdown = MarkdownString;
+/** Local alias binding `ThemeColor` to a mangleable identifier. */
+const VsThemeColor = ThemeColor;
+
+/** Local alias binding `Uri` to a mangleable identifier. */
+const VsUri = Uri;
 
 /** Shared `'Language Server'` title fragment. */
 const LANG_SERVER_TEXT = 'Language Server';
@@ -157,20 +161,23 @@ const LSP_SERVICE_LABEL = `${LANG_SERVER_TEXT} (\`corex lsp\`)`;
 /** Shared display label for the Formatter service. */
 const FMT_SERVICE_LABEL = 'Formatter (`corex fmt`)';
 
-/** Command suffix revealing the `CoreX` output channel. */
-const SUB_OUTPUT = 'showOutputChannel';
-
-/** Command suffix restarting `corex lsp`. */
-const SUB_RESTART = 'restartServer';
-
-/** Command suffix stopping `corex lsp`. */
-const SUB_STOP = 'stopServer';
-
-/** Command suffix opening the status-bar QuickPick menu. */
-const SUB_STATUS = 'showStatusMenu';
-
-/** Command suffix toggling editor inlay hints. */
-const SUB_HINTS = 'toggleInlayHints';
+/** Shared UI words & `corex.*` command suffixes. */
+const [
+  DOC_WORD,
+  DISABLED_TEXT,
+  SHOW_OUTPUT_LABEL,
+  RESTART_LABEL,
+  SETTINGS_LABEL,
+  INLAY_HINTS_LABEL,
+  SUB_OUTPUT,
+  SUB_RESTART,
+  SUB_STOP,
+  SUB_STATUS,
+  SUB_HINTS,
+] = splitCsv(
+  'Document,Disabled,Show Output,Restart,Settings,Inlay Hints,' +
+    'showOutputChannel,restartServer,stopServer,showStatusMenu,toggleInlayHints'
+) as [string, string, string, string, string, string, string, string, string, string, string];
 
 /** Local alias binding `CodeActionKind.QuickFix`. */
 const QUICK_FIX_KIND = CodeActionKind.QuickFix;
@@ -182,17 +189,39 @@ const COREX_SELECTOR: DocumentSelector = { language: COREX_CONFIG_SECTION, schem
 const CMD_OPEN_SETTINGS = 'workbench.action.openSettings';
 
 /** Shared warning string when no `corex` binary was auto-discovered. */
-const BINARY_NOT_FOUND_MSG = 'CoreX: binary not found.';
+const BINARY_NOT_FOUND_MSG = 'Binary not found.';
 
-/** $O(1)$ set of directory names ignored by workspace `FileSystemWatcher` callbacks. */
-const IGNORED_SEGMENTS: ReadonlySet<string> = new Set(
-  '.corex,.git,build,node_modules,zig-out'.split(',')
-);
+/** Shared `'SemanticTokens'` provider suffix. */
+const SEM_TOKENS = 'SemanticTokens';
 
 // ----------------------------------- REGEX PATTERNS ------------------------------------
 
-/** Matches POSIX and Windows path separators without backtracking. */
-const PATH_SPLIT_RX = /[\\/]/;
+/** Matches workspace-relative paths inside ignored build, VCS, or dependency directories. */
+const IGNORED_PATH_RX = /(?:^|[\\/])(?:\.(?:corex|git)|build|node_modules|zig-out)(?:[\\/]|$)/;
+
+/** Matches pure variable discard statements (`_ = ident;`) without side-effecting calls or projections. */
+const PURE_DISCARD_RX = /^\s*_\s*=\s*(?:[a-z][a-z0-9_]*|_\w+)\s*;\s*(?:\/\/.*)?$/;
+
+/** Matches standalone closing multiline string lines (`^[ ]*"#*`) without trailing identifier characters. */
+// oxlint-disable-next-line prefer-named-capture-group -- positional groups avoid unmangleable group keys under 25 KB bundle budget
+const CLOSE_MULTILINE_RX = /^( *)"(#*)(?!\w)/;
+
+/** Matches a closed single-line `"…"` or `'…'` literal with backslash escapes. */
+const CLOSED_QUOTED_RX = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/;
+
+/** Matches comments, multiline string openers, single-line strings/chars, and `_unused` / word tokens. */
+const LINE_TOKEN_RX = new RegExp(
+  `${
+    // oxlint-disable-next-line prefer-named-capture-group -- positional groups avoid unmangleable group keys under 25 KB bundle budget
+    /\/(?:[/|#].*|\*.*?(?:\*\/|$))|(?:\b(?:(?:f|b?r)(#*)|b)|(?<![\w"#]))(")$|\b(f(?=#)|b?r)(#*)"|/
+      .source
+  }${
+    // oxlint-disable-next-line prefer-named-capture-group -- positional groups avoid unmangleable group keys under 25 KB bundle budget
+    /\bf"(?:\\.|[^"\\{]|\{\{|\{(?!\{)(?:@|\{(?:@|[^"{}'])*\}|[^"{}'])*\})*"?|(?:\bb)?(?:@|["'].*)|(_\w+)|\w+/
+      .source
+  }`.replaceAll('@', CLOSED_QUOTED_RX.source),
+  'g'
+);
 
 // -------------------------------------- INTERNALS --------------------------------------
 
@@ -212,6 +241,15 @@ let inlayHintsEmitter: EventEmitter<void> | undefined = undefined;
 
 /** Lazily created status-bar item (`CoreX`). */
 let statusBarItem: StatusBarItem | undefined = undefined;
+
+/** Lazily created `1px` vertical strip-margin guide decoration for multiline strings. */
+let stripGuideDecoration: TextEditorDecorationType | undefined = undefined;
+
+/** Lazily created `0.58` opacity dimming decoration for `_ = ident;` discards and `_unused` bindings. */
+let mutedDimDecoration: TextEditorDecorationType | undefined = undefined;
+
+/** Debounce timer (`35 ms`) coalescing visible-range and document-edit decoration refreshes. */
+let decorationTimer: ReturnType<typeof setTimeout> | undefined = undefined;
 
 /** Timer scheduling a delayed server restart after an unexpected crash. */
 let crashTimer: ReturnType<typeof setTimeout> | undefined = undefined;
@@ -257,7 +295,7 @@ const crashTimestamps: number[] = [];
  *
  * @param suffix   Command or configuration key suffix.
  */
-function corexId(suffix: string): string {
+function formatCorexId(suffix: string): string {
   return `${COREX_CONFIG_SECTION}.${suffix}`;
 }
 
@@ -269,15 +307,6 @@ function corexId(suffix: string): string {
  */
 function execVsCmd(commandId: string, commandArg?: string): Thenable<unknown> {
   return commands.executeCommand(commandId, ...(commandArg ? [commandArg] : []));
-}
-
-/**
- * Parses `rawUri` into a VS Code `Uri` instance.
- *
- * @param rawUri   Canonical URI string.
- */
-function parseVsUri(rawUri: string): Uri {
-  return Uri.parse(rawUri);
 }
 
 /**
@@ -357,23 +386,9 @@ function withRunningDoc(
   handler: (client: LspClientSession, uri: string) => void
 ): void {
   const client = getRunningClient();
-  if (client !== undefined && isCorexFileDoc(document)) {
+  if (client && isCorexFileDoc(document)) {
     handler(client, readDocUri(document));
   }
-}
-
-/**
- * Returns `true` when `fsPath` contains any directory segment listed in `IGNORED_SEGMENTS`.
- *
- * @param fsPath   Filesystem path emitted by `FileSystemWatcher`.
- */
-function hasIgnoredSegment(fsPath: string): boolean {
-  for (const segment of fsPath.split(PATH_SPLIT_RX)) {
-    if (IGNORED_SEGMENTS.has(segment)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** Collects filesystem paths and LSP descriptors of all open local `file:` workspace folders. */
@@ -409,10 +424,15 @@ function putBounded<T>(cache: Map<string, T>, uri: string, value: T): void {
  * @param items    Source array.
  * @param mapper   Element conversion function.
  */
-function mapList<T, R>(items: readonly T[], mapper: (item: T, index: number) => R): R[] {
+function mapList<T, R>(
+  items: readonly T[] | undefined,
+  mapper: (item: T, index: number) => R
+): R[] {
   const out: R[] = [];
-  for (let i = 0; i < items.length; i += 1) {
-    out.push(mapper(items[i] as T, i));
+  if (items) {
+    for (let i = 0; i < items.length; i += 1) {
+      out.push(mapper(items[i] as T, i));
+    }
   }
   return out;
 }
@@ -429,31 +449,30 @@ function buildListMapper<T, R>(
 }
 
 /**
- * Summarizes `[client, lspStatus, fmtStatus, hintsStatus]` for the status-bar hover card and QuickPick menu.
+ * Summarizes `[client, lspStatus, fmtStatus, hintsStatus, toggleLabel]` for the status bar and menu.
  *
  * @param summary   Primary status headline.
  */
 function describeServices(
   summary = 'Inactive'
-): readonly [LspClientSession | undefined, string, string, string] {
+): readonly [LspClientSession | undefined, string, string, string, 'Stop' | 'Start'] {
   const cfg = readExtensionConfig();
   const client = getRunningClient();
-  let lspStatus = summary;
+  let lspStatus = cfg.isLspEnabled ? summary : DISABLED_TEXT;
   if (!vsWorkspace.isTrusted) {
     lspStatus = 'Untrusted';
   } else if (client) {
-    lspStatus = `Running (\`pid ${client.pid}\`)`;
+    lspStatus = `PID ${client.pid}`;
   } else if (isManuallyStopped) {
     lspStatus = 'Stopped';
-  } else if (!cfg.isLspEnabled) {
-    lspStatus = 'Disabled';
   }
-
-  let fmtStatus = 'Disabled';
-  if (isCorexActive() && cfg.isFormatEnabled) {
-    fmtStatus = `Ready (${client ? 'LSP' : 'CLI'})`;
-  }
-  return [client, lspStatus, fmtStatus, cfg.isInlayHintsEnabled ? 'On' : 'Off'];
+  return [
+    client,
+    lspStatus,
+    isCorexActive() && cfg.isFormatEnabled ? `Ready (${client ? 'LSP' : 'CLI'})` : DISABLED_TEXT,
+    cfg.isInlayHintsEnabled ? 'On' : 'Off',
+    client ? 'Stop' : 'Start',
+  ];
 }
 
 /**
@@ -467,28 +486,32 @@ function setStatus(icon: StatusIcon, summary: string): void {
     return;
   }
   lastStatusState = [icon, summary];
-  const [client, lspStatus, fmtStatus, hintsStatus] = describeServices(summary);
-  const actionLinks = mapList(
-    [
-      ['Output', corexId(SUB_OUTPUT)],
-      ['Restart', corexId(SUB_RESTART)],
-      [client ? 'Stop' : 'Start', corexId(client ? SUB_STOP : SUB_RESTART)],
-      [`Inlay Hints: ${hintsStatus}`, corexId(SUB_HINTS)],
-      ['Settings', `${CMD_OPEN_SETTINGS}?%22${COREX_CONFIG_SECTION}%22`],
-    ] as const,
-    ([label, cmdTarget]) => `[${label}](command:${cmdTarget})`
-  ).join(' · ');
+  const [client, lspStatus, fmtStatus, hintsStatus, toggleLabel] = describeServices(summary);
   const tooltip = new VsMarkdown(
-    `**CoreX** – ${summary}\n\n$(${client ? 'check' : icon}) **${LSP_SERVICE_LABEL}:** ${lspStatus}\n\n$(${fmtStatus === 'Disabled' ? 'circle-slash' : 'check'}) **${FMT_SERVICE_LABEL}:** ${fmtStatus}\n\n${actionLinks}`,
+    `**CoreX** – ${summary}
+
+$(${client ? 'check' : icon}) **${LSP_SERVICE_LABEL}:** ${lspStatus}
+
+$(${fmtStatus === DISABLED_TEXT ? 'circle-slash' : 'check'}) **${FMT_SERVICE_LABEL}:** ${fmtStatus}
+
+${mapList(
+  [
+    ['Output', SUB_OUTPUT],
+    [RESTART_LABEL, SUB_RESTART],
+    [toggleLabel, client ? SUB_STOP : SUB_RESTART],
+    [`${INLAY_HINTS_LABEL}: ${hintsStatus}`, SUB_HINTS],
+  ] as const,
+  ([label, subCmd]) => `[${label}](command:${formatCorexId(subCmd)}) · `
+).join('')}[${SETTINGS_LABEL}](command:${CMD_OPEN_SETTINGS}?%22${COREX_CONFIG_SECTION}%22)`,
     true
   );
   tooltip.isTrusted = true;
   assignProps((statusBarItem ??= vsWindow.createStatusBarItem(2 as StatusBarAlignment, 100)), {
     backgroundColor:
       icon === 'error' || icon === 'warning'
-        ? new ThemeColor(`statusBarItem.${icon}Background`)
+        ? new VsThemeColor(`statusBarItem.${icon}Background`)
         : undefined,
-    command: corexId(SUB_STATUS),
+    command: formatCorexId(SUB_STATUS),
     text: `$(${icon}) CoreX`,
     tooltip,
   }).show();
@@ -520,17 +543,8 @@ function shiftEnum(oneBased: number, maxZero: number): number {
  *
  * @param position   VS Code UTF-16 position.
  */
-function toLspPos(position: Position): LspPosition {
-  return { character: position.character, line: position.line };
-}
-
-/**
- * Converts a `Range` to a 0-based `LspRange`.
- *
- * @param range   VS Code UTF-16 range.
- */
-function toLspRange(range: Range): LspRange {
-  return { end: toLspPos(range.end), start: toLspPos(range.start) };
+function toLspPos({ character, line }: Position): LspPosition {
+  return { character, line };
 }
 
 /**
@@ -539,7 +553,7 @@ function toLspRange(range: Range): LspRange {
  * @param range   VS Code UTF-16 range.
  */
 function toRangeParam(range: Range): { readonly range: LspRange } {
-  return { range: toLspRange(range) };
+  return { range: { end: toLspPos(range.end), start: toLspPos(range.start) } };
 }
 
 /**
@@ -557,7 +571,7 @@ function toVsPos(position?: Partial<LspPosition>): Position {
  * @param range   0-based LSP range.
  */
 function toVsRange(range?: Partial<LspRange>): Range {
-  return new Range(toVsPos(range?.start), toVsPos(range?.end));
+  return new VsRange(toVsPos(range?.start), toVsPos(range?.end));
 }
 
 /**
@@ -578,7 +592,7 @@ function tryVsRange(rawRange: unknown): Range | undefined {
  */
 function toVsLocation(location: LspLocation): Location {
   return new Location(
-    parseVsUri(isValidUri(location.uri) ? location.uri : 'file:///'),
+    VsUri.parse(isValidUri(location.uri) ? location.uri : 'file:///'),
     toVsRange(location.range)
   );
 }
@@ -644,7 +658,7 @@ function pickTags<T extends number>(
       valid.push(tag as T);
     }
   }
-  return valid[0] ? valid : undefined;
+  return valid[0] && valid;
 }
 
 /**
@@ -683,20 +697,6 @@ const mapEditList = buildListMapper(toVsEdit);
 const mapLocationList = buildListMapper(toVsLocation);
 
 /**
- * Narrows and converts an untrusted `definition` / `typeDefinition` payload.
- *
- * @param rawValue   Untrusted location payload.
- */
-function mapLocations(rawValue: unknown): Location | Location[] | null {
-  return (
-    mapLocationList(rawValue) ??
-    (isRecord(rawValue) && isValidUri(rawValue.uri)
-      ? toVsLocation(rawValue as unknown as LspLocation)
-      : null)
-  );
-}
-
-/**
  * Recursively converts an `LspDocumentSymbol` tree into a `DocumentSymbol` tree.
  *
  * @param rawSym   Hierarchical LSP document symbol node.
@@ -710,15 +710,9 @@ function toVsDocSymbol(rawSym: LspDocumentSymbol): DocumentSymbol {
       toVsRange(rawSym.range),
       toVsRange(rawSym.selectionRange)
     ),
-    {
-      ...(rawSym.children?.length && { children: mapList(rawSym.children, toVsDocSymbol) }),
-      tags: pickTags<SymbolTag>(rawSym.tags),
-    }
+    { children: mapList(rawSym.children, toVsDocSymbol), tags: pickTags<SymbolTag>(rawSym.tags) }
   );
 }
-
-/** Shared validator mapping an untrusted `LspDocumentSymbol[]` array into `DocumentSymbol[] | null`. */
-const mapDocSymbolList = buildListMapper(toVsDocSymbol);
 
 /**
  * Narrows `string | LspMarkupContent` into `string | MarkdownString | undefined`.
@@ -728,7 +722,8 @@ const mapDocSymbolList = buildListMapper(toVsDocSymbol);
 function toVsDoc(docVal: unknown): string | MarkdownString | undefined {
   if (isStr(docVal)) {
     return docVal;
-  } else if (isRecord(docVal) && isStr(docVal.value)) {
+  }
+  if (isRecord(docVal) && isStr(docVal.value)) {
     return docVal.kind === 'markdown' ? new VsMarkdown(docVal.value) : docVal.value;
   }
   return undefined;
@@ -740,14 +735,15 @@ function toVsDoc(docVal: unknown): string | MarkdownString | undefined {
  * @param rawEdit   Untrusted workspace edit object.
  */
 function toVsWorkspaceEdit(rawEdit: unknown): WorkspaceEdit | null {
-  if (!isRecord(rawEdit) || (rawEdit.changes !== undefined && !isRecord(rawEdit.changes))) {
+  const changes = isRecord(rawEdit) ? rawEdit.changes : null;
+  if (changes === null || (changes !== undefined && !isRecord(changes))) {
     return null;
   }
   const edit = new WorkspaceEdit();
-  for (const [uri, rawEdits] of Object.entries(rawEdit.changes ?? {})) {
+  for (const [uri, rawEdits] of Object.entries(changes ?? {})) {
     const mappedEdits = isValidUri(uri) && mapEditList(rawEdits);
     if (mappedEdits) {
-      edit.set(parseVsUri(uri), mappedEdits);
+      edit.set(VsUri.parse(uri), mappedEdits);
     }
   }
   return edit;
@@ -768,6 +764,7 @@ function syncOpenedDoc(
   uri = readDocUri(document)
 ): void {
   if (
+    !openDocVersions.has(uri) &&
     notifyTextDocument(client, 'didOpen', uri, {
       languageId: COREX_CONFIG_SECTION,
       text: document.getText(),
@@ -788,7 +785,7 @@ function closeTrackedDoc(document: TextDocument, client = getRunningClient()): v
   const uri = readDocUri(document);
   pullResultIds.delete(uri);
   diagnosticCollection?.delete(document.uri);
-  if (openDocVersions.delete(uri) && client !== undefined) {
+  if (openDocVersions.delete(uri) && client) {
     notifyTextDocument(client, 'didClose', uri);
   }
 }
@@ -809,28 +806,23 @@ async function requestLsp<R>(
   mapFn: (rawValue: unknown) => R | null,
   errMode: QueryErrorMode = 0
 ): Promise<R | null> {
-  if (!isCorexActive() || !readExtensionConfig().isLspEnabled) {
-    return null;
-  }
-  const client = await sessionPromise;
-  if (client !== activeClient || client?.isRunning() !== true) {
-    return null;
-  }
-  try {
-    return mapFn(await client.request(method, params, token));
-  } catch (error: unknown) {
-    if (!isCanceled(token)) {
-      if (errMode === 1 && isJsonRpcRequestError(error) && error.code === LSP_SERVER_CANCELED) {
-        throw new Error('Busy', { cause: error });
-      } else if (
-        errMode === 2 &&
-        (!isJsonRpcRequestError(error) || error.code !== LSP_REQUEST_CANCELED)
-      ) {
-        throw error;
+  const client =
+    isCorexActive() && readExtensionConfig().isLspEnabled ? await sessionPromise : undefined;
+  if (client === activeClient && client?.isRunning()) {
+    try {
+      return mapFn(await client.request(method, params, token));
+    } catch (error: unknown) {
+      if (!isCanceled(token)) {
+        const isRpc = isJsonRpcRequestError(error);
+        if (errMode === 1 && isRpc && error.code === LSP_SERVER_CANCELED) {
+          throw new Error('Busy', { cause: error });
+        } else if (errMode === 2 && (!isRpc || error.code !== LSP_REQUEST_CANCELED)) {
+          throw error;
+        }
       }
     }
-    return null;
   }
+  return null;
 }
 
 /**
@@ -892,31 +884,6 @@ function queryPos<R>(
   );
 }
 
-/** Maps an untrusted `documentHighlight` response array into `DocumentHighlight[] | null`. */
-const mapDocHighlights = buildListMapper(
-  (hit: LspDocumentHighlight) =>
-    new DocumentHighlight(
-      toVsRange(hit.range),
-      shiftEnum(hit.kind ?? 1, 2) as DocumentHighlightKind
-    )
-);
-
-/**
- * Handles inbound `textDocument/publishDiagnostics`, dropping closed-tab and stale-version frames.
- *
- * @param params   Inbound `publishDiagnostics` notification payload.
- */
-function handlePublishDiagnostics(params: LspPublishDiagnosticsParams): void {
-  const targetUri = parseVsUri(params.uri);
-  const canonicalUri = targetUri.toString();
-  pullResultIds.delete(canonicalUri);
-  const knownVer = openDocVersions.get(canonicalUri);
-  if (knownVer === undefined || (params.version !== undefined && params.version < knownVer)) {
-    return;
-  }
-  diagnosticCollection?.set(targetUri, toVsDiagnostics(params.diagnostics));
-}
-
 /**
  * Refreshes diagnostics across all currently open `.cx` tabs (optionally skipping `excludedUri`).
  *
@@ -924,7 +891,7 @@ function handlePublishDiagnostics(params: LspPublishDiagnosticsParams): void {
  */
 function refreshSiblingDocs(excludedUri?: string): void {
   const client = getRunningClient();
-  if (client === undefined) {
+  if (!client) {
     return;
   }
   for (const [uri, ver] of openDocVersions) {
@@ -942,7 +909,7 @@ function refreshSiblingDocs(excludedUri?: string): void {
               }
               if (report.kind === 'full' && isArray(report.items)) {
                 diagnosticCollection?.set(
-                  parseVsUri(uri),
+                  VsUri.parse(uri),
                   toVsDiagnostics(report.items as readonly LspDiagnostic[])
                 );
               }
@@ -956,58 +923,32 @@ function refreshSiblingDocs(excludedUri?: string): void {
 // --------------------- Language Providers ---------------------
 
 /**
- * Builds a `provideDocument<mid>SemanticTokens` method identifier.
- *
- * @param mid   Infix token (`''` or `'Range'`).
- */
-function buildSemMethod(mid: string): string {
-  return `provideDocument${mid}SemanticTokens`;
-}
-
-/**
- * Expands shorthand `'#'` prefixes into `'Document'` and strips plural `'*'` markers.
+ * Expands `'#'` into `'Document'` and removes plural `'*'` markers.
  *
  * @param kind   Provider base name with optional `'#'` prefix or trailing `'*'`.
  */
-function expandDocKind(kind: string): string {
-  return kind.replace('#', 'Document').replace('*', '');
+function cleanProviderKind(kind: string): string {
+  return kind.replace('#', DOC_WORD).replace('*', '');
 }
 
 /**
- * Converts a `PascalCase` provider name into its `camelCase` LSP method suffix.
+ * Registers a `vscode.languages.register<kind>Provider` (`'#'` = `'Document'`, trailing `'*'` = plural `'s'`).
  *
- * @param pascalName   Expanded VS Code provider name.
+ * @param kind       VS Code provider base name (`'#'` expands to `'Document'`).
+ * @param provider   Provider object or single-method callback function.
+ * @param extra      Optional trailing registration arguments (trigger chars, metadata).
  */
-function toCamelMethod(pascalName: string): string {
-  return pascalName.charAt(0).toLowerCase() + pascalName.slice(1);
-}
-
-/**
- * Invokes `vscode.languages.register<kind>Provider(...args)` dynamically.
- *
- * @param kind   VS Code provider base name (`'#'` expands to `'Document'`).
- * @param args   Arguments forwarded to the registration method.
- */
-function registerLangProvider(kind: string, ...args: unknown[]): Disposable {
-  return (vsLanguages as unknown as Record<string, (...rest: unknown[]) => Disposable>)[
-    `register${expandDocKind(kind)}Provider`
-  ]?.(...(kind === 'WorkspaceSymbol' ? args : [COREX_SELECTOR, ...args])) as Disposable;
-}
-
-/**
- * Registers a single-method `vscode.languages.register<kind>Provider` (`'*'` suffix adds plural `'s'`).
- *
- * @param kind      VS Code provider base name (`'#'` = `'Document'`, trailing `'*'` = plural `'s'`).
- * @param handler   Provider method implementation.
- * @param extra     Optional trailing registration arguments (trigger chars, metadata).
- */
-function registerSingleProvider(kind: string, handler: unknown, ...extra: unknown[]): Disposable {
-  const fullKind = expandDocKind(kind);
-  return registerLangProvider(
-    fullKind,
-    { [`provide${fullKind}${kind.endsWith('*') ? 's' : ''}`]: handler },
+function registerLangProvider(kind: string, provider: unknown, ...extra: unknown[]): Disposable {
+  const fullKind = cleanProviderKind(kind);
+  return (languages as unknown as Record<string, (...rest: unknown[]) => Disposable>)[
+    `register${fullKind}Provider`
+  ]?.(
+    ...(fullKind === 'WorkspaceSymbol' ? [] : [COREX_SELECTOR]),
+    typeof provider === 'function'
+      ? { [`provide${fullKind}${kind.endsWith('*') ? 's' : ''}`]: provider }
+      : provider,
     ...extra
-  );
+  ) as Disposable;
 }
 
 /**
@@ -1024,8 +965,9 @@ function registerPosProvider<R>(
   mapFn: (rawValue: unknown) => R | null,
   ...extra: unknown[]
 ): Disposable {
-  const subMethod = lspOverride || toCamelMethod(expandDocKind(kind));
-  return registerSingleProvider(
+  const fullKind = cleanProviderKind(kind);
+  const subMethod = lspOverride || fullKind.charAt(0).toLowerCase() + fullKind.slice(1);
+  return registerLangProvider(
     kind,
     (document: TextDocument, position: Position, token: CancellationToken) =>
       queryPos(document, subMethod, position, token, mapFn),
@@ -1042,7 +984,7 @@ function syncFormatProviders(): void {
   }
 
   formatProviderSubs.push(
-    registerSingleProvider(
+    registerLangProvider(
       '#FormattingEdit*',
       async (document: TextDocument, options: unknown, token: CancellationToken) => {
         if (!isCorexActive() || !isCorexFileDoc(document)) {
@@ -1068,30 +1010,32 @@ function syncFormatProviders(): void {
           isInternalCoreEnabled(latestCfg.internalCore, workspaceDirs, [document.uri.fsPath]),
           token
         );
-        if (formattedText === null) {
-          return null;
-        }
-        const diff = computeMinimalUtf16Edit(originalText, formattedText);
-        return appendLfEdit(document, diff ? [toVsEdit(diff)] : []);
+        return formattedText === null
+          ? null
+          : appendLfEdit(
+              document,
+              originalText === formattedText
+                ? []
+                : [new VsTextEdit(new VsRange(0, 0, document.lineCount, 0), formattedText)]
+            );
       }
-    )
+    ),
+    ...(cfg.isLspEnabled
+      ? [
+          registerLangProvider(
+            '#RangeFormattingEdit*',
+            (document: TextDocument, range: Range, options: unknown, token: CancellationToken) =>
+              queryDoc(
+                document,
+                'rangeFormatting',
+                { ...toRangeParam(range), options },
+                token,
+                mapEditList
+              )
+          ),
+        ]
+      : [])
   );
-
-  if (cfg.isLspEnabled) {
-    formatProviderSubs.push(
-      registerSingleProvider(
-        '#RangeFormattingEdit*',
-        (document: TextDocument, range: Range, options: unknown, token: CancellationToken) =>
-          queryDoc(
-            document,
-            'rangeFormatting',
-            { ...toRangeParam(range), options },
-            token,
-            mapEditList
-          )
-      )
-    );
-  }
 }
 
 /**
@@ -1113,231 +1057,6 @@ function querySem<R = SemanticTokens>(
   return queryDoc(document, `semanticTokens/${subPath}`, extra, token, mapFn, 1);
 }
 
-/** Registers all LSP-backed VS Code language providers so early requests await `sessionPromise`. */
-function ensureLspProviders(): void {
-  if (lspProviderSubs.length > 0 || inlayHintsEmitter === undefined) {
-    return;
-  }
-  const legend = new SemanticTokensLegend(
-    (
-      'namespace,type,struct,enum,interface,typeParameter,parameter,variable,property,enumMember,' +
-      'function,method,macro,keyword,modifier,comment,string,number,operator,decorator'
-    ).split(','),
-    (
-      'declaration,definition,readonly,static,deprecated,abstract,async,modification,documentation,' +
-      'defaultLibrary,mutable,consumedMove,unsafe,attribute,linearResource'
-    ).split(',')
-  );
-  const fullSemMethod = buildSemMethod('');
-  const semProvider = {
-    [buildSemMethod('Range')]: (document: TextDocument, range: Range, token: CancellationToken) =>
-      querySem(document, 'range', toRangeParam(range), token),
-    [fullSemMethod]: (document: TextDocument, token: CancellationToken) =>
-      querySem(document, 'full', {}, token),
-    [`${fullSemMethod}Edits`]: (
-      document: TextDocument,
-      previousResultId: string,
-      token: CancellationToken
-    ) =>
-      querySem<SemanticTokens | SemanticTokensEdits>(
-        document,
-        'full/delta',
-        { previousResultId },
-        token,
-        (rawValue) =>
-          hasArrayProp(rawValue, 'edits')
-            ? new SemanticTokensEdits(
-                mapList(
-                  rawValue.edits as readonly LspSemanticTokensEdit[],
-                  (tokenEdit) =>
-                    new SemanticTokensEdit(
-                      tokenEdit.start,
-                      tokenEdit.deleteCount,
-                      tokenEdit.data && new Uint32Array(tokenEdit.data)
-                    )
-                ),
-                readOptStr(rawValue.resultId)
-              )
-            : mapSemTokens(rawValue)
-      ),
-  };
-
-  lspProviderSubs.push(
-    ...mapList(['#', '#Range'], (prefix) =>
-      registerLangProvider(`${prefix}SemanticTokens`, semProvider, legend)
-    ),
-    registerPosProvider('Hover', '', (rawValue) => {
-      const content = isRecord(rawValue) && toVsDoc(rawValue.contents);
-      return content ? new Hover(content, tryVsRange(rawValue.range)) : null;
-    }),
-    ...mapList(['', 'Type'], (prefix) =>
-      registerPosProvider(`${prefix}Definition`, '', mapLocations)
-    ),
-    registerPosProvider('#Highlight*', '', mapDocHighlights),
-    registerSingleProvider(
-      'Reference*',
-      (
-        document: TextDocument,
-        position: Position,
-        refContext: ReferenceContext,
-        token: CancellationToken
-      ) =>
-        queryPos(document, 'references', position, token, mapLocationList, {
-          context: { includeDeclaration: refContext.includeDeclaration },
-        })
-    ),
-    registerSingleProvider('#Symbol*', (document: TextDocument, token: CancellationToken) =>
-      queryDoc(document, 'documentSymbol', {}, token, mapDocSymbolList)
-    ),
-    registerLangProvider('WorkspaceSymbol', {
-      provideWorkspaceSymbols: (query: string, token: CancellationToken) =>
-        requestLsp(
-          'workspace/symbol',
-          { query },
-          token,
-          buildListMapper((rawSym: LspSymbolInformation) =>
-            assignProps(
-              new SymbolInformation(
-                rawSym.name,
-                shiftEnum(rawSym.kind, 25) as SymbolKind,
-                rawSym.containerName ?? '',
-                toVsLocation(rawSym.location)
-              ),
-              { tags: pickTags<SymbolTag>(rawSym.tags) }
-            )
-          )
-        ),
-    }),
-    registerPosProvider(
-      'CompletionItem*',
-      'completion',
-      (rawValue) => {
-        const rawItems = hasArrayProp(rawValue, 'items') ? rawValue.items : rawValue;
-        return isArray(rawItems)
-          ? new CompletionList(
-              mapList(rawItems as readonly LspCompletionItem[], (rawItem, i) =>
-                assignProps(
-                  new CompletionItem(
-                    rawItem.label,
-                    rawItem.kind ? (shiftEnum(rawItem.kind, 24) as CompletionItemKind) : undefined
-                  ),
-                  {
-                    detail: rawItem.detail,
-                    documentation: toVsDoc(rawItem.documentation),
-                    insertText: rawItem.textEdit?.newText ?? rawItem.insertText,
-                    range: rawItem.textEdit && toVsRange(rawItem.textEdit.range),
-                    sortText: String(10_000 + i).slice(1),
-                    tags: pickTags<CompletionItemTag>(rawItem.tags),
-                  }
-                )
-              ),
-              Boolean(isRecord(rawValue) && rawValue.isIncomplete)
-            )
-          : null;
-      },
-      '.',
-      '@',
-      ':'
-    ),
-    registerPosProvider(
-      'SignatureHelp',
-      '',
-      (rawValue) =>
-        hasArrayProp(rawValue, 'signatures')
-          ? assignProps(new SignatureHelp(), {
-              activeParameter: toNonNegInt(rawValue.activeParameter),
-              activeSignature: toNonNegInt(rawValue.activeSignature),
-              signatures: mapList(
-                rawValue.signatures as readonly LspSignatureInformation[],
-                (rawSig) =>
-                  assignProps(
-                    new SignatureInformation(rawSig.label, toVsDoc(rawSig.documentation)),
-                    {
-                      activeParameter: rawSig.activeParameter,
-                      parameters: mapList(
-                        rawSig.parameters ?? [],
-                        (param) =>
-                          new ParameterInformation(
-                            param.label as string | [number, number],
-                            toVsDoc(param.documentation)
-                          )
-                      ),
-                    }
-                  )
-              ),
-            })
-          : null,
-      { retriggerCharacters: [','], triggerCharacters: ['(', ',', '['] }
-    ),
-    registerLangProvider('InlayHints', {
-      onDidChangeInlayHints: inlayHintsEmitter.event,
-      provideInlayHints: (document: TextDocument, range: Range, token: CancellationToken) =>
-        readExtensionConfig().isInlayHintsEnabled
-          ? queryDoc(
-              document,
-              'inlayHint',
-              toRangeParam(range),
-              token,
-              buildListMapper((rawHint: LspInlayHint) =>
-                assignProps(
-                  new InlayHint(
-                    toVsPos(rawHint.position),
-                    rawHint.label,
-                    rawHint.kind === 1 || rawHint.kind === 2
-                      ? (rawHint.kind as InlayHintKind)
-                      : undefined
-                  ),
-                  {
-                    paddingLeft: rawHint.paddingLeft,
-                    paddingRight: rawHint.paddingRight,
-                    textEdits: rawHint.textEdits && mapList(rawHint.textEdits, toVsEdit),
-                    tooltip: toVsDoc(rawHint.tooltip),
-                  }
-                )
-              )
-            )
-          : [],
-    }),
-    registerSingleProvider(
-      'CodeActions',
-      (document: TextDocument, range: Range, _context: unknown, token: CancellationToken) =>
-        queryDoc(
-          document,
-          'codeAction',
-          { ...toRangeParam(range), context: { only: [QUICK_FIX_KIND] } },
-          token,
-          buildListMapper((rawAction: LspCodeAction) =>
-            assignProps(new CodeAction(rawAction.title, QUICK_FIX_KIND), {
-              diagnostics: rawAction.diagnostics && toVsDiagnostics(rawAction.diagnostics),
-              edit: toVsWorkspaceEdit(rawAction.edit) ?? undefined,
-              isPreferred: rawAction.isPreferred,
-            })
-          )
-        ),
-      { providedCodeActionKinds: [QUICK_FIX_KIND] }
-    ),
-    registerLangProvider('Rename', {
-      async prepareRename(document: TextDocument, position: Position, token: CancellationToken) {
-        const prep = await queryPos(document, 'prepareRename', position, token, (rawValue) => {
-          const range =
-            isRecord(rawValue) && isStr(rawValue.placeholder) && tryVsRange(rawValue.range);
-          return range ? { placeholder: rawValue.placeholder as string, range } : null;
-        });
-        if (!prep && !isCanceled(token)) {
-          throw new Error('This symbol cannot be renamed.');
-        }
-        return prep ?? undefined;
-      },
-      provideRenameEdits: (
-        document: TextDocument,
-        position: Position,
-        newName: string,
-        token: CancellationToken
-      ) => queryPos(document, 'rename', position, token, toVsWorkspaceEdit, { newName }, 2),
-    })
-  );
-}
-
 // --------------------- Server Supervision ---------------------
 
 /**
@@ -1356,7 +1075,7 @@ function showErrorPrompt(
 ): void {
   runDetached(
     vsWindow
-      .showErrorMessage(message, primaryButton, 'Show Output')
+      .showErrorMessage(message, primaryButton, SHOW_OUTPUT_LABEL)
       .then((choice) =>
         choice === primaryButton ? execVsCmd(commandId, commandArg) : choice && showOutputChannel()
       )
@@ -1383,89 +1102,19 @@ function reportErrorStatus(message: string, error?: unknown): void {
 }
 
 /**
- * Supervises unexpected `corex lsp` exits (`<= 4` automatic restarts within `60_000 ms`).
+ * Reconciles `corex lsp`, formatting providers, and status bar against Workspace Trust & config.
  *
- * @param exitCode         Child exit status code.
- * @param signal           Termination signal if killed.
- * @param restartTrigger   Callback launching the next server generation.
+ * @param mode   Optional transition mode (`1 = fresh reset`, `2 = manual stop`).
  */
-function onUnexpectedExit(
-  exitCode: number | null,
-  signal: NodeJS.Signals | null,
-  restartTrigger: () => void
-): void {
-  if (isDeactivated) {
-    return;
+function reconcileSession(mode?: 1 | 2): Promise<LspClientSession | undefined> {
+  if (mode === 1) {
+    isManuallyStopped = false;
+    invalidateConfigCache();
+    crashTimestamps.length = 0;
+    lastMissingKey = undefined;
+  } else if (mode === 2) {
+    isManuallyStopped = true;
   }
-  clearSessionTracking();
-  const now = Date.now();
-  while ((crashTimestamps[0] ?? now) < now - 60_000) {
-    crashTimestamps.shift();
-  }
-  logError(`Exit ${exitCode}/${signal}`);
-  if (crashTimestamps.push(now) > 4) {
-    const msg = 'CoreX LSP crashed.';
-    reportErrorStatus(msg);
-    showErrorPrompt(msg, 'Restart', corexId(SUB_RESTART));
-    return;
-  }
-  const delay = 250 * 2 ** (crashTimestamps.length - 1);
-  setStatus('sync~spin', `Retry in ${delay} ms…`);
-  clearTimer(crashTimer);
-  crashTimer = setTimer(() => {
-    crashTimer = undefined;
-    if (!isDeactivated) {
-      restartTrigger();
-    }
-  }, delay);
-}
-
-/**
- * Reports a missing `corex` binary to the status bar, output channel, and (for explicit paths) toast.
- *
- * @param missing   Failed binary discovery result.
- */
-function reportMissingBinary(missing: BinaryResolutionMissing): void {
-  if (missing.reason === 'not-found') {
-    setStatus('warning', BINARY_NOT_FOUND_MSG);
-    logWarn(BINARY_NOT_FOUND_MSG);
-    return;
-  }
-  const candidate = missing.configuredCandidate ?? readExtensionConfig().executablePath;
-  const msg = `Missing: ${candidate}`;
-  reportErrorStatus(msg);
-  if (lastMissingKey !== candidate) {
-    lastMissingKey = candidate;
-    showErrorPrompt(msg, 'Settings', CMD_OPEN_SETTINGS, corexId(EXEC_PATH_KEY));
-  }
-}
-
-/**
- * Synchronizes providers and status bar against Workspace Trust, manual stop state, and `corex.lsp.enable`.
- *
- * @param cfg   Current validated configuration snapshot.
- */
-function hasActiveLspGate(cfg: ExtensionConfig): boolean {
-  syncFormatProviders();
-  if (isCorexActive() && cfg.isLspEnabled && !isManuallyStopped) {
-    ensureLspProviders();
-    return true;
-  }
-  disposeList(lspProviderSubs);
-  if (!vsWorkspace.isTrusted) {
-    setStatus('warning', 'Untrusted.');
-  } else if (!cfg.isEnabled) {
-    statusBarItem?.hide();
-  } else if (isManuallyStopped) {
-    setStatus('circle-slash', 'Stopped.');
-  } else {
-    setStatus('warning', cfg.isFormatEnabled ? 'CLI fmt.' : 'Off.');
-  }
-  return false;
-}
-
-/** Reconciles `corex lsp`, formatting providers, and status bar against Workspace Trust & config. */
-function reconcileSession(): Promise<LspClientSession | undefined> {
   sessionGen += 1;
   const gen = sessionGen;
   const prevPromise = sessionPromise;
@@ -1477,82 +1126,384 @@ function reconcileSession(): Promise<LspClientSession | undefined> {
     clearSessionTracking();
     await prevClient?.stop();
     const cfg = readExtensionConfig();
-    if (isDeactivated || gen !== sessionGen || !hasActiveLspGate(cfg)) {
+    if (isDeactivated || gen !== sessionGen) {
+      return undefined;
+    }
+    syncFormatProviders();
+    if (!isCorexActive() || !cfg.isLspEnabled || isManuallyStopped) {
+      disposeList(lspProviderSubs);
+      if (!vsWorkspace.isTrusted) {
+        setStatus('warning', 'Untrusted.');
+      } else if (!cfg.isEnabled) {
+        statusBarItem?.hide();
+      } else if (isManuallyStopped) {
+        setStatus('circle-slash', 'Stopped.');
+      } else {
+        setStatus('warning', cfg.isFormatEnabled ? 'CLI fmt.' : 'Off.');
+      }
       return undefined;
     }
 
-    const [workspaceDirs, workspaceFolders] = collectWorkspaces();
-    const binaryRes = resolveCorexBinary(cfg.executablePath, { workspaceDirs });
-    if (!binaryRes.isFound) {
-      reportMissingBinary(binaryRes);
-      return undefined;
-    }
+    /** Spawns and supervises `corex lsp` for generation `gen`. */
+    async function launchSession(): Promise<LspClientSession | undefined> {
+      if (!lspProviderSubs[0] && inlayHintsEmitter) {
+        const legend = new SemanticTokensLegend(
+          splitCsv(
+            'namespace,type,struct,enum,interface,typeParameter,parameter,variable,property,enumMember,' +
+              'function,method,macro,keyword,modifier,comment,string,number,operator,decorator'
+          ),
+          splitCsv(
+            'declaration,definition,readonly,static,deprecated,abstract,async,modification,documentation,' +
+              'defaultLibrary,mutable,consumedMove,unsafe,attribute,linearResource'
+          )
+        );
+        const fullSemMethod = `provide${DOC_WORD}${SEM_TOKENS}`;
+        const semProvider = {
+          [`provide${DOC_WORD}Range${SEM_TOKENS}`]: (
+            document: TextDocument,
+            range: Range,
+            token: CancellationToken
+          ) => querySem(document, 'range', toRangeParam(range), token),
+          [fullSemMethod]: (document: TextDocument, token: CancellationToken) =>
+            querySem(document, 'full', {}, token),
+          [`${fullSemMethod}Edits`]: (
+            document: TextDocument,
+            previousResultId: string,
+            token: CancellationToken
+          ) =>
+            querySem<SemanticTokens | SemanticTokensEdits>(
+              document,
+              'full/delta',
+              { previousResultId },
+              token,
+              (rawValue) =>
+                hasArrayProp(rawValue, 'edits')
+                  ? new SemanticTokensEdits(
+                      mapList(
+                        rawValue.edits as readonly LspSemanticTokensEdit[],
+                        (tokenEdit) =>
+                          new SemanticTokensEdit(
+                            tokenEdit.start,
+                            tokenEdit.deleteCount,
+                            tokenEdit.data && new Uint32Array(tokenEdit.data)
+                          )
+                      ),
+                      readOptStr(rawValue.resultId)
+                    )
+                  : mapSemTokens(rawValue)
+            ),
+        };
 
-    lastMissingKey = undefined;
-    const openCxPaths: string[] = [];
-    forEachOpenCxDoc((doc) => openCxPaths.push(doc.uri.fsPath));
-    const { binaryPath } = binaryRes;
-    const isInternalCore = isInternalCoreEnabled(cfg.internalCore, workspaceDirs, openCxPaths);
-    setStatus('sync~spin', 'Starting…');
-    logInfo(`Start ${binaryPath}`);
+        lspProviderSubs.push(
+          ...mapList(['#', '#Range'], (prefix) =>
+            registerLangProvider(prefix + SEM_TOKENS, semProvider, legend)
+          ),
+          registerPosProvider('Hover', '', (rawValue) => {
+            const content = isRecord(rawValue) && toVsDoc(rawValue.contents);
+            return content ? new Hover(content, tryVsRange(rawValue.range)) : null;
+          }),
+          ...mapList(['', 'Type'], (prefix) =>
+            registerPosProvider(
+              `${prefix}Definition`,
+              '',
+              (rawValue) =>
+                mapLocationList(rawValue) ??
+                (isRecord(rawValue) && isValidUri(rawValue.uri)
+                  ? toVsLocation(rawValue as unknown as LspLocation)
+                  : null)
+            )
+          ),
+          registerPosProvider(
+            '#Highlight*',
+            '',
+            buildListMapper(
+              (hit: LspDocumentHighlight) =>
+                new DocumentHighlight(
+                  toVsRange(hit.range),
+                  shiftEnum(hit.kind ?? 1, 2) as DocumentHighlightKind
+                )
+            )
+          ),
+          registerLangProvider(
+            'Reference*',
+            (
+              document: TextDocument,
+              position: Position,
+              context: ReferenceContext,
+              token: CancellationToken
+            ) => queryPos(document, 'references', position, token, mapLocationList, { context })
+          ),
+          registerLangProvider('#Symbol*', (document: TextDocument, token: CancellationToken) =>
+            queryDoc(document, 'documentSymbol', {}, token, buildListMapper(toVsDocSymbol))
+          ),
+          registerLangProvider('WorkspaceSymbol*', (query: string, token: CancellationToken) =>
+            requestLsp(
+              'workspace/symbol',
+              { query },
+              token,
+              buildListMapper((rawSym: LspSymbolInformation) =>
+                assignProps(
+                  new SymbolInformation(
+                    rawSym.name,
+                    shiftEnum(rawSym.kind, 25) as SymbolKind,
+                    rawSym.containerName ?? '',
+                    toVsLocation(rawSym.location)
+                  ),
+                  { tags: pickTags<SymbolTag>(rawSym.tags) }
+                )
+              )
+            )
+          ),
+          registerPosProvider(
+            'CompletionItem*',
+            'completion',
+            (rawValue) => {
+              const rawItems = hasArrayProp(rawValue, 'items') ? rawValue.items : rawValue;
+              return isArray(rawItems)
+                ? new CompletionList(
+                    mapList(rawItems as readonly LspCompletionItem[], (rawItem, i) => {
+                      const { textEdit } = rawItem;
+                      return assignProps(
+                        new CompletionItem(
+                          rawItem.label,
+                          rawItem.kind
+                            ? (shiftEnum(rawItem.kind, 24) as CompletionItemKind)
+                            : undefined
+                        ),
+                        {
+                          detail: rawItem.detail,
+                          documentation: toVsDoc(rawItem.documentation),
+                          insertText: textEdit?.newText ?? rawItem.insertText,
+                          range: textEdit && toVsRange(textEdit.range),
+                          sortText: `${1e4 + i}`.slice(1),
+                          tags: pickTags<CompletionItemTag>(rawItem.tags),
+                        }
+                      );
+                    }),
+                    Boolean((rawValue as { isIncomplete?: unknown })?.isIncomplete)
+                  )
+                : null;
+            },
+            '.',
+            '@',
+            ':'
+          ),
+          registerPosProvider(
+            'SignatureHelp',
+            '',
+            (rawValue) =>
+              hasArrayProp(rawValue, 'signatures')
+                ? assignProps(new SignatureHelp(), {
+                    activeParameter: toNonNegInt(rawValue.activeParameter),
+                    activeSignature: toNonNegInt(rawValue.activeSignature),
+                    signatures: mapList(
+                      rawValue.signatures as readonly LspSignatureInformation[],
+                      (rawSig) =>
+                        assignProps(
+                          new SignatureInformation(rawSig.label, toVsDoc(rawSig.documentation)),
+                          {
+                            activeParameter: rawSig.activeParameter,
+                            parameters: mapList(
+                              rawSig.parameters,
+                              (param) =>
+                                new ParameterInformation(
+                                  param.label as string | [number, number],
+                                  toVsDoc(param.documentation)
+                                )
+                            ),
+                          }
+                        )
+                    ),
+                  })
+                : null,
+            { retriggerCharacters: [','], triggerCharacters: [...'(,['] }
+          ),
+          registerLangProvider('InlayHints', {
+            onDidChangeInlayHints: inlayHintsEmitter.event,
+            provideInlayHints: (document: TextDocument, range: Range, token: CancellationToken) =>
+              readExtensionConfig().isInlayHintsEnabled
+                ? queryDoc(
+                    document,
+                    'inlayHint',
+                    toRangeParam(range),
+                    token,
+                    buildListMapper((rawHint: LspInlayHint) =>
+                      assignProps(
+                        new InlayHint(
+                          toVsPos(rawHint.position),
+                          rawHint.label,
+                          rawHint.kind === 1 || rawHint.kind === 2
+                            ? (rawHint.kind as InlayHintKind)
+                            : undefined
+                        ),
+                        {
+                          paddingLeft: rawHint.paddingLeft,
+                          paddingRight: rawHint.paddingRight,
+                          textEdits: rawHint.textEdits && mapList(rawHint.textEdits, toVsEdit),
+                          tooltip: toVsDoc(rawHint.tooltip),
+                        }
+                      )
+                    )
+                  )
+                : [],
+          }),
+          registerLangProvider(
+            'CodeActions',
+            (document: TextDocument, range: Range, _context: unknown, token: CancellationToken) =>
+              queryDoc(
+                document,
+                'codeAction',
+                { ...toRangeParam(range), context: { only: [QUICK_FIX_KIND] } },
+                token,
+                buildListMapper((rawAction: LspCodeAction) =>
+                  assignProps(new CodeAction(rawAction.title, QUICK_FIX_KIND), {
+                    diagnostics: rawAction.diagnostics && toVsDiagnostics(rawAction.diagnostics),
+                    edit: toVsWorkspaceEdit(rawAction.edit) ?? undefined,
+                    isPreferred: rawAction.isPreferred,
+                  })
+                )
+              ),
+            { providedCodeActionKinds: [QUICK_FIX_KIND] }
+          ),
+          registerLangProvider('Rename', {
+            async prepareRename(
+              document: TextDocument,
+              position: Position,
+              token: CancellationToken
+            ) {
+              const prep = await queryPos(
+                document,
+                'prepareRename',
+                position,
+                token,
+                (rawValue) => {
+                  const range =
+                    isRecord(rawValue) && isStr(rawValue.placeholder) && tryVsRange(rawValue.range);
+                  return range ? { placeholder: rawValue.placeholder as string, range } : null;
+                }
+              );
+              if (!prep && !isCanceled(token)) {
+                throw new Error('Cannot rename.');
+              }
+              return prep ?? undefined;
+            },
+            provideRenameEdits: (
+              document: TextDocument,
+              position: Position,
+              newName: string,
+              token: CancellationToken
+            ) => queryPos(document, 'rename', position, token, toVsWorkspaceEdit, { newName }, 2),
+          })
+        );
+      }
 
-    try {
-      const client = await startLspClient({
-        binaryPath,
-        cwd: workspaceDirs[0] ?? (openCxPaths[0] && pathDirname(openCxPaths[0])),
-        isInternalCore,
-        onExit: (exitCode, signal, isUnexpected) => {
-          if (isUnexpected && activeClient === client) {
-            onUnexpectedExit(exitCode, signal, () => runDetached(reconcileSession()));
+      const [workspaceDirs, workspaceFolders] = collectWorkspaces();
+      const binaryRes = resolveCorexBinary(cfg.executablePath, { workspaceDirs });
+      if (!binaryRes.isFound) {
+        if (binaryRes.reason === 'not-found') {
+          setStatus('warning', BINARY_NOT_FOUND_MSG);
+          logWarn(BINARY_NOT_FOUND_MSG);
+        } else {
+          const candidate = binaryRes.configuredCandidate ?? cfg.executablePath;
+          const msg = `Missing: ${candidate}`;
+          reportErrorStatus(msg);
+          if (lastMissingKey !== candidate) {
+            lastMissingKey = candidate;
+            showErrorPrompt(msg, SETTINGS_LABEL, CMD_OPEN_SETTINGS, formatCorexId(EXEC_PATH_KEY));
           }
-        },
-        onProtocolError: logWarn,
-        onPublishDiagnostics: (params) => {
-          if (activeClient === client) {
-            handlePublishDiagnostics(params);
-          }
-        },
-        onStderr: (line) => logInfo(`[lsp] ${line}`),
-        onTrace: logTrace,
-        traceMode: cfg.traceServer,
-        workspaceFolders,
-      });
-
-      if (isDeactivated || gen !== sessionGen) {
-        await client.stop();
+        }
         return undefined;
       }
 
-      activeClient = client;
-      forEachOpenCxDoc((doc) => syncOpenedDoc(client, doc));
-      inlayHintsEmitter?.fire();
+      lastMissingKey = undefined;
+      const openCxPaths: string[] = [];
+      forEachOpenCxDoc((doc) => openCxPaths.push(doc.uri.fsPath));
+      const { binaryPath } = binaryRes;
+      const isInternalCore = isInternalCoreEnabled(cfg.internalCore, workspaceDirs, openCxPaths);
+      setStatus('sync~spin', 'Starting…');
+      logInfo(`Start ${binaryPath}`);
 
-      const readyBanner = `CoreX LSP v${client.initializeResult.serverInfo?.version ?? '0.1.0'}${isInternalCore ? ` [${INTERNAL_CORE_FLAG}]` : ''}`;
-      setStatus('check', readyBanner);
-      logInfo(readyBanner);
-      return client;
-    } catch (error: unknown) {
-      if (!isDeactivated && gen === sessionGen) {
-        reportErrorStatus('LSP failed.', error);
+      try {
+        const client = await startLspClient({
+          binaryPath,
+          cwd: workspaceDirs[0] ?? (openCxPaths[0] && pathDirname(openCxPaths[0])),
+          isInternalCore,
+          onExit: (exitCode, signal, isUnexpected) => {
+            if (!isUnexpected || activeClient !== client || isDeactivated) {
+              return;
+            }
+            clearSessionTracking();
+            const now = Date.now();
+            while ((crashTimestamps[0] ?? now) < now - 60_000) {
+              crashTimestamps.shift();
+            }
+            logError(`Exit ${exitCode}/${signal}`);
+            if (crashTimestamps.push(now) > 4) {
+              const msg = 'LSP crashed.';
+              reportErrorStatus(msg);
+              showErrorPrompt(msg, RESTART_LABEL, formatCorexId(SUB_RESTART));
+              return;
+            }
+            const delay = 250 * 2 ** (crashTimestamps.length - 1);
+            setStatus('sync~spin', `Retry in ${delay} ms…`);
+            clearTimer(crashTimer);
+            crashTimer = setTimer(() => {
+              crashTimer = undefined;
+              if (!isDeactivated) {
+                runDetached(reconcileSession());
+              }
+            }, delay);
+          },
+          onProtocolError: logWarn,
+          onPublishDiagnostics: (params: LspPublishDiagnosticsParams) => {
+            if (activeClient === client) {
+              const targetUri = VsUri.parse(params.uri);
+              const canonicalUri = targetUri.toString();
+              pullResultIds.delete(canonicalUri);
+              const knownVer = openDocVersions.get(canonicalUri);
+              if (
+                knownVer !== undefined &&
+                (params.version === undefined || params.version >= knownVer)
+              ) {
+                diagnosticCollection?.set(targetUri, toVsDiagnostics(params.diagnostics));
+              }
+            }
+          },
+          onStderr: (line) => logInfo(`[lsp] ${line}`),
+          onTrace: logTrace,
+          traceMode: cfg.traceServer,
+          workspaceFolders,
+        });
+
+        if (isDeactivated || gen !== sessionGen) {
+          await client.stop();
+          return undefined;
+        }
+
+        activeClient = client;
+        forEachOpenCxDoc((doc) => syncOpenedDoc(client, doc));
+        inlayHintsEmitter?.fire();
+
+        const readyBanner = `LSP v${client.initializeResult.serverInfo?.version ?? '0.1.0'}${isInternalCore ? ` [${INTERNAL_CORE_FLAG}]` : ''}`;
+        setStatus('check', readyBanner);
+        logInfo(readyBanner);
+        return client;
+      } catch (error: unknown) {
+        if (!isDeactivated && gen === sessionGen) {
+          reportErrorStatus('LSP failed.', error);
+        }
+        return undefined;
       }
-      return undefined;
     }
+
+    return launchSession();
   })();
   return sessionPromise;
 }
 
-/** Reloads configuration, clears manual-stop/crash/binary guards, and reconciles the session. */
-function reconcileFresh(): Promise<LspClientSession | undefined> {
-  isManuallyStopped = false;
-  invalidateConfigCache();
-  crashTimestamps.length = 0;
-  lastMissingKey = undefined;
-  return reconcileSession();
-}
-
 /** Triggers a detached fresh session reconciliation. */
 function triggerFreshReconcile(): void {
-  runDetached(reconcileFresh());
+  runDetached(reconcileSession(1));
 }
 
 /** Starts or restarts `corex lsp` on user command, warning if the workspace is untrusted. */
@@ -1561,16 +1512,12 @@ function restartFromCommand(): Promise<LspClientSession | undefined> | undefined
     runDetached(vsWindow.showWarningMessage('Grant Workspace Trust to run CoreX.'));
     return undefined;
   }
-  return reconcileFresh();
+  return reconcileSession(1);
 }
 
 /** Stops any running `corex lsp` server until restarted by the user or configuration change. */
 function stopServerManually(): Promise<LspClientSession | undefined> | undefined {
-  if (!vsWorkspace.isTrusted) {
-    return undefined;
-  }
-  isManuallyStopped = true;
-  return reconcileSession();
+  return vsWorkspace.isTrusted ? reconcileSession(2) : undefined;
 }
 
 /** Toggles `corex.inlayHints.enable` in user configuration. */
@@ -1580,37 +1527,10 @@ function toggleInlayHintsCommand(): Thenable<void> {
     .update(INLAY_HINTS_KEY, !readExtensionConfig().isInlayHintsEnabled, true);
 }
 
-/** Opens the Oxc-style dual-service (`Language Server` + `Formatter`) status-bar QuickPick menu. */
-function openStatusMenu(): PromiseLike<unknown> {
-  const [client, lspStatus, fmtStatus, hintsStatus] = describeServices();
-  return vsWindow
-    .showQuickPick(
-      mapList(
-        [
-          [LSP_SERVICE_LABEL],
-          ['$(output) Show Output', showOutputChannel, lspStatus],
-          [`$(refresh) Restart ${LANG_SERVER_TEXT}`, restartFromCommand],
-          [
-            `$(${client ? 'stop' : 'play'}-circle) ${client ? 'Stop' : 'Start'} ${LANG_SERVER_TEXT}`,
-            client ? stopServerManually : restartFromCommand,
-          ],
-          ['$(eye) Inlay Hints', toggleInlayHintsCommand, hintsStatus],
-          [FMT_SERVICE_LABEL],
-          ['$(wand) Format', () => execVsCmd('editor.action.formatDocument'), fmtStatus],
-          ['$(gear) Settings', () => execVsCmd(CMD_OPEN_SETTINGS, COREX_CONFIG_SECTION)],
-        ] as readonly (readonly [string, (() => unknown)?, string?])[],
-        ([label, action, description]): StatusMenuEntry =>
-          action ? { action, description, label } : { kind: -1 as QuickPickItemKind, label }
-      ),
-      { title: 'CoreX' }
-    )
-    .then((pickedItem) => pickedItem?.action?.());
-}
-
 /**
  * Subscribes to `target.onDid<name>` (`'#'` expands to `'TextDocument'`).
  *
- * @param target     VS Code `workspace` or `FileSystemWatcher` event source.
+ * @param target     VS Code `workspace`, `window`, or `FileSystemWatcher` event source.
  * @param name       Event suffix under `onDid` (`'#'` = `'TextDocument'`).
  * @param listener   Event callback.
  */
@@ -1620,57 +1540,156 @@ function subscribeDidEvent<T>(
   listener: (event: T) => unknown
 ): Disposable {
   return (target as Record<string, (cb: (event: T) => unknown) => Disposable>)[
-    `onDid${name.replace('#', 'TextDocument')}`
+    `onDid${name.replace('~', 'Change').replace('#', `Text${DOC_WORD}`)}`
   ]?.(listener) as Disposable;
 }
 
-/**
- * Enqueues a `FileSystemWatcher` event and schedules a `75 ms` debounced `didChangeWatchedFiles` flush.
- *
- * @param uri          Affected file URI.
- * @param changeType   LSP `FileChangeType` (`1 = Created`, `2 = Changed`, `3 = Deleted`).
- */
-function recordWatchedEvent(uri: Uri, changeType: LspFileChangeType): void {
-  if (
-    isDeactivated ||
-    !isCorexActive() ||
-    uri.scheme !== 'file' ||
-    hasIgnoredSegment(vsWorkspace.asRelativePath(uri, false))
-  ) {
-    return;
-  }
-  const canonicalUri = uri.toString();
-  if (!isValidUri(canonicalUri)) {
-    return;
-  }
-  if (changeType === 3) {
-    pullResultIds.delete(canonicalUri);
-  }
-  const prevType = pendingWatchedEvents.get(canonicalUri);
-  if (prevType === 1 && changeType === 3) {
-    pendingWatchedEvents.delete(canonicalUri);
-    return;
-  }
-  putBounded(
-    pendingWatchedEvents,
-    canonicalUri,
-    prevType === 1 && changeType === 2 ? 1 : changeType
-  );
+// --------------------- Editor Decorations ---------------------
 
-  clearTimer(watcherTimer);
-  watcherTimer = setTimer(() => {
-    watcherTimer = undefined;
-    const client = getRunningClient();
-    if (client !== undefined && pendingWatchedEvents.size > 0) {
-      const changes: LspFileEvent[] = [];
-      for (const [watchedUri, watchedType] of pendingWatchedEvents) {
-        changes.push({ type: watchedType, uri: watchedUri });
-      }
-      client.notify('workspace/didChangeWatchedFiles', { changes });
-      refreshSiblingDocs();
+/**
+ * Creates a single-line `Range` spanning `[colStart, colStart + spanLen)` on `lineIdx`.
+ *
+ * @param lineIdx    Zero-based line index.
+ * @param colStart   Zero-based inclusive start column.
+ * @param spanLen    Code-unit span length (`0` when omitted).
+ */
+function createLineRange(lineIdx: number, colStart: number, spanLen = 0): Range {
+  return new VsRange(lineIdx, colStart, lineIdx, colStart + spanLen);
+}
+
+/**
+ * Computes and applies `stripGuideDecoration` and `mutedDimDecoration` across `editor.visibleRanges`.
+ *
+ * @param editor   Visible CoreX text editor (`languageId === 'corex'`).
+ */
+function updateEditorDecorations(editor: TextEditor): void {
+  const { document, visibleRanges } = editor;
+  if (isDeactivated || document.languageId !== COREX_CONFIG_SECTION) {
+    return;
+  }
+  if (!stripGuideDecoration) {
+    [stripGuideDecoration, mutedDimDecoration] = mapList(
+      [
+        {
+          borderColor: new VsThemeColor('editorIndentGuide.activeBackground1'),
+          borderStyle: 'solid',
+          borderWidth: '0 0 0 1px',
+        },
+        { opacity: '0.58' },
+      ],
+      (options) => vsWindow.createTextEditorDecorationType(options)
+    ) as [TextEditorDecorationType, TextEditorDecorationType];
+  }
+
+  const stripRanges: Range[] = [];
+  const mutedRanges: Range[] = [];
+  const lastDocLine = document.lineCount - 1;
+  let prevVisEnd = -1;
+  let scannedCount = 0;
+
+  /** Scans non-comment, non-string tokens on `lineText` from `startCol`. */
+  function scanCodeTokens(
+    lineText: string,
+    lineIdx: number,
+    startCol: number,
+    isEmittable: boolean
+  ): string | undefined {
+    if (!startCol && isEmittable && PURE_DISCARD_RX.test(lineText)) {
+      const startIdx = lineText.indexOf('_');
+      mutedRanges.push(createLineRange(lineIdx, startIdx, lineText.indexOf(';') + 1 - startIdx));
+      return undefined;
     }
-    pendingWatchedEvents.clear();
-  }, 75);
+
+    LINE_TOKEN_RX.lastIndex = startCol;
+    for (
+      let tokMatch = LINE_TOKEN_RX.exec(lineText);
+      tokMatch;
+      tokMatch = LINE_TOKEN_RX.exec(lineText)
+    ) {
+      if (tokMatch[2]) {
+        return tokMatch[1] ?? '';
+      }
+      if (tokMatch[3]) {
+        const closeDelim = `"${tokMatch[4]}`;
+        const closeIdx = lineText.indexOf(closeDelim, LINE_TOKEN_RX.lastIndex);
+        LINE_TOKEN_RX.lastIndex = closeIdx === -1 ? lineText.length : closeIdx + closeDelim.length;
+      } else if (tokMatch[5] && isEmittable) {
+        mutedRanges.push(createLineRange(lineIdx, tokMatch.index, tokMatch[5].length));
+      }
+    }
+    return undefined;
+  }
+
+  for (const visibleRange of visibleRanges) {
+    const visEnd = Math.min(lastDocLine, visibleRange.end.line);
+    const emitStart = Math.max(visibleRange.start.line, prevVisEnd + 1);
+    const scanEnd = Math.min(lastDocLine, visEnd + 256);
+    let openLine = -1;
+    let openHashes = '';
+
+    for (
+      let lineIdx = Math.max(0, visibleRange.start.line - 256);
+      lineIdx <= scanEnd && scannedCount < 4096;
+      lineIdx += 1
+    ) {
+      scannedCount += 1;
+      const lineText = document.lineAt(lineIdx).text;
+      let colIdx = 0;
+
+      if (openLine >= 0) {
+        const closeMatch = CLOSE_MULTILINE_RX.exec(lineText);
+        if (closeMatch?.[2] === openHashes) {
+          const colC = (closeMatch[1] as string).length;
+          if (colC > 0 && lineIdx - openLine <= 256) {
+            for (
+              let innerIdx = Math.max(openLine + 1, emitStart);
+              innerIdx < lineIdx && innerIdx <= visEnd;
+              innerIdx += 1
+            ) {
+              if (document.lineAt(innerIdx).text.length >= colC) {
+                stripRanges.push(createLineRange(innerIdx, colC));
+              }
+            }
+          }
+          openLine = -1;
+          colIdx = closeMatch[0].length;
+        }
+      }
+
+      if (openLine < 0) {
+        const nextHashes = scanCodeTokens(
+          lineText,
+          lineIdx,
+          colIdx,
+          lineIdx >= emitStart && lineIdx <= visEnd
+        );
+        if (nextHashes !== undefined) {
+          openLine = lineIdx;
+          openHashes = nextHashes;
+        }
+      }
+    }
+    prevVisEnd = Math.max(prevVisEnd, visEnd);
+  }
+
+  editor.setDecorations(stripGuideDecoration, stripRanges);
+  editor.setDecorations(mutedDimDecoration as TextEditorDecorationType, mutedRanges);
+}
+
+/** Schedules a `35 ms` debounced decoration pass across all visible `.cx` editors. */
+function scheduleDecorations(): void {
+  if (!isDeactivated) {
+    clearTimer(decorationTimer);
+    decorationTimer = setTimer(() => {
+      decorationTimer = undefined;
+      const editors = vsWindow.visibleTextEditors;
+      for (const editor of editors?.length ? editors : [vsWindow.activeTextEditor]) {
+        if (editor) {
+          updateEditorDecorations(editor);
+        }
+      }
+    }, 35);
+  }
 }
 
 // ------------------------------------- PUBLIC API --------------------------------------
@@ -1682,33 +1701,77 @@ function recordWatchedEvent(uri: Uri, changeType: LspFileChangeType): void {
  */
 export function activate(context: ExtensionContext): void {
   isDeactivated = false;
-  diagnosticCollection = vsLanguages.createDiagnosticCollection(COREX_CONFIG_SECTION);
+  diagnosticCollection = languages.createDiagnosticCollection(COREX_CONFIG_SECTION);
   inlayHintsEmitter = new EventEmitter<void>();
   const watcher = vsWorkspace.createFileSystemWatcher('**/{*.cx,corex.toml,corex.lock}');
 
-  const { subscriptions } = context;
-  for (const [subCmd, handler] of [
-    [SUB_OUTPUT, showOutputChannel],
-    [SUB_RESTART, restartFromCommand],
-    [SUB_STOP, stopServerManually],
-    [SUB_STATUS, openStatusMenu],
-    [SUB_HINTS, toggleInlayHintsCommand],
-  ] as const) {
-    subscriptions.push(commands.registerCommand(corexId(subCmd), handler));
-  }
-  subscriptions.push(
+  context.subscriptions.push(
+    ...mapList(
+      [
+        [SUB_OUTPUT, showOutputChannel],
+        [SUB_RESTART, restartFromCommand],
+        [SUB_STOP, stopServerManually],
+        [
+          SUB_STATUS,
+          () => {
+            const [client, lspStatus, fmtStatus, hintsStatus, toggleLabel] = describeServices();
+            return vsWindow
+              .showQuickPick(
+                mapList(
+                  [
+                    [LSP_SERVICE_LABEL],
+                    [`$(output) ${SHOW_OUTPUT_LABEL}`, showOutputChannel, lspStatus],
+                    [`$(refresh) ${RESTART_LABEL} ${LANG_SERVER_TEXT}`, restartFromCommand],
+                    [
+                      `$(${client ? 'stop' : 'play'}-circle) ${toggleLabel} ${LANG_SERVER_TEXT}`,
+                      client ? stopServerManually : restartFromCommand,
+                    ],
+                    [`$(eye) ${INLAY_HINTS_LABEL}`, toggleInlayHintsCommand, hintsStatus],
+                    [FMT_SERVICE_LABEL],
+                    [
+                      '$(wand) Format',
+                      () => execVsCmd(`editor.action.format${DOC_WORD}`),
+                      fmtStatus,
+                    ],
+                    [
+                      `$(gear) ${SETTINGS_LABEL}`,
+                      () => execVsCmd(CMD_OPEN_SETTINGS, COREX_CONFIG_SECTION),
+                    ],
+                  ] as readonly (readonly [string, (() => unknown)?, string?])[],
+                  ([label, action, description]): StatusMenuEntry => ({
+                    action,
+                    description,
+                    kind: (action ? 0 : -1) as QuickPickItemKind,
+                    label,
+                  })
+                ),
+                { title: 'CoreX' }
+              )
+              .then((pickedItem) => pickedItem?.action?.());
+          },
+        ],
+        [SUB_HINTS, toggleInlayHintsCommand],
+      ] as const,
+      ([subCmd, handler]) => commands.registerCommand(formatCorexId(subCmd), handler)
+    ),
+    subscribeDidEvent(vsWindow, '~ActiveTextEditor', scheduleDecorations),
+    subscribeDidEvent<{ readonly textEditor: TextEditor }>(
+      vsWindow,
+      '~TextEditorVisibleRanges',
+      ({ textEditor }) =>
+        textEditor.document.languageId === COREX_CONFIG_SECTION && scheduleDecorations()
+    ),
     subscribeDidEvent<TextDocument>(vsWorkspace, 'Open#', (document) =>
-      withRunningDoc(document, (client, uri) => {
-        if (!openDocVersions.has(uri)) {
-          syncOpenedDoc(client, document, uri);
-        }
-      })
+      withRunningDoc(document, (client, uri) => syncOpenedDoc(client, document, uri))
     ),
     subscribeDidEvent<{
       readonly contentChanges: readonly { readonly range: Range; readonly text: string }[];
       readonly document: TextDocument;
-    }>(vsWorkspace, 'Change#', ({ contentChanges, document }) => {
+    }>(vsWorkspace, '~#', ({ contentChanges, document }) => {
       if (contentChanges[0]) {
+        if (document.languageId === COREX_CONFIG_SECTION) {
+          scheduleDecorations();
+        }
         withRunningDoc(document, (client, uri) => {
           pullResultIds.delete(uri);
           if (!openDocVersions.has(uri)) {
@@ -1735,16 +1798,16 @@ export function activate(context: ExtensionContext): void {
         refreshSiblingDocs(uri);
       })
     ),
-    subscribeDidEvent<TextDocument>(vsWorkspace, 'Close#', (document) => closeTrackedDoc(document)),
+    subscribeDidEvent<TextDocument>(vsWorkspace, 'Close#', closeTrackedDoc),
     subscribeDidEvent(vsWorkspace, 'GrantWorkspaceTrust', triggerFreshReconcile),
-    subscribeDidEvent(vsWorkspace, 'ChangeWorkspaceFolders', () => {
-      if (vsWorkspace.isTrusted) {
-        triggerFreshReconcile();
-      }
-    }),
+    subscribeDidEvent(
+      vsWorkspace,
+      '~WorkspaceFolders',
+      () => vsWorkspace.isTrusted && triggerFreshReconcile()
+    ),
     subscribeDidEvent<{ readonly affectsConfiguration: (section: string) => boolean }>(
       vsWorkspace,
-      'ChangeConfiguration',
+      '~Configuration',
       (configEvent) => {
         if (configEvent.affectsConfiguration(COREX_CONFIG_SECTION)) {
           const prevConfig = readExtensionConfig();
@@ -1756,9 +1819,7 @@ export function activate(context: ExtensionContext): void {
             if (prevConfig.traceServer !== nextConfig.traceServer) {
               activeClient?.setTraceMode(nextConfig.traceServer);
             }
-            if (prevConfig.isFormatEnabled !== nextConfig.isFormatEnabled) {
-              syncFormatProviders();
-            }
+            syncFormatProviders();
             if (prevConfig.isInlayHintsEnabled !== nextConfig.isInlayHintsEnabled) {
               inlayHintsEmitter?.fire();
             }
@@ -1769,14 +1830,53 @@ export function activate(context: ExtensionContext): void {
         }
       }
     ),
-    ...mapList(['Create', 'Change', 'Delete'] as const, (evName, idx) =>
-      subscribeDidEvent<Uri>(watcher, evName, (uri) =>
-        recordWatchedEvent(uri, (idx + 1) as LspFileChangeType)
-      )
+    ...mapList(['Create', '~', 'Delete'] as const, (evName, idx) =>
+      subscribeDidEvent<Uri>(watcher, evName, (uri) => {
+        const changeType = (idx + 1) as LspFileChangeType;
+        const canonicalUri = uri.toString();
+        if (
+          isDeactivated ||
+          !isCorexActive() ||
+          uri.scheme !== 'file' ||
+          !isValidUri(canonicalUri) ||
+          IGNORED_PATH_RX.test(vsWorkspace.asRelativePath(uri, false))
+        ) {
+          return;
+        }
+        if (changeType === 3) {
+          pullResultIds.delete(canonicalUri);
+        }
+        const prevType = pendingWatchedEvents.get(canonicalUri);
+        if (prevType === 1 && changeType === 3) {
+          pendingWatchedEvents.delete(canonicalUri);
+          return;
+        }
+        putBounded(
+          pendingWatchedEvents,
+          canonicalUri,
+          prevType === 1 && changeType === 2 ? 1 : changeType
+        );
+        clearTimer(watcherTimer);
+        watcherTimer = setTimer(() => {
+          watcherTimer = undefined;
+          const client = getRunningClient();
+          if (client && pendingWatchedEvents.size) {
+            client.notify('workspace/didChangeWatchedFiles', {
+              changes: mapList([...pendingWatchedEvents], ([watchedUri, type]) => ({
+                type,
+                uri: watchedUri,
+              })),
+            });
+            refreshSiblingDocs();
+          }
+          pendingWatchedEvents.clear();
+        }, 75);
+      })
     ),
     watcher
   );
 
+  scheduleDecorations();
   triggerFreshReconcile();
 }
 
@@ -1784,18 +1884,21 @@ export function activate(context: ExtensionContext): void {
 export async function deactivate(): Promise<void> {
   isDeactivated = true;
   isManuallyStopped = false;
-  lastStatusState = undefined;
+  clearTimer(decorationTimer);
   clearTimer(watcherTimer);
-  watcherTimer = undefined;
   await reconcileSession();
   disposeList(lspProviderSubs);
   disposeList(formatProviderSubs);
-  for (const item of [statusBarItem, inlayHintsEmitter, diagnosticCollection]) {
+  for (const item of [
+    stripGuideDecoration,
+    mutedDimDecoration,
+    statusBarItem,
+    inlayHintsEmitter,
+    diagnosticCollection,
+  ]) {
     item?.dispose();
   }
-  statusBarItem = undefined;
-  inlayHintsEmitter = undefined;
-  diagnosticCollection = undefined;
+  [lastStatusState, stripGuideDecoration, mutedDimDecoration, statusBarItem] = [] as undefined[];
   pendingWatchedEvents.clear();
   crashTimestamps.length = 0;
   disposeLogger();

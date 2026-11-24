@@ -400,6 +400,14 @@ export interface MockDiagnosticCollection {
   readonly set: (uri: MockUri, diagnostics: readonly MockDiagnostic[] | undefined) => void;
 }
 
+/** Single line record returned by `MockTextDocument.lineAt(line)`. */
+export interface MockTextLine {
+  /** Zero-based line index. */
+  readonly lineNumber: number;
+  /** Line text without trailing `\r` or `\n`. */
+  readonly text: string;
+}
+
 /** Mock `vscode.TextDocument` supporting `LF`/`CRLF` buffers and version increments. */
 export interface MockTextDocument {
   /** Document line-ending mode (`EndOfLine.LF = 1`, `EndOfLine.CRLF = 2`). */
@@ -408,12 +416,63 @@ export interface MockTextDocument {
   readonly getText: () => string;
   /** Language identifier (`'corex'`, `'plaintext'`, etc.). */
   readonly languageId: string;
+  /** Returns the line descriptor at zero-based `line`. */
+  readonly lineAt: (line: number) => MockTextLine;
   /** Number of lines in the current buffer. */
   lineCount: number;
   /** Document URI. */
   readonly uri: MockUri;
   /** Monotonic document version number. */
   version: number;
+}
+
+/** Subset of `vscode.DecorationRenderOptions` used by CoreX editor decorations. */
+export interface MockDecorationRenderOptions {
+  /** Optional CSS or `ThemeColor` border color. */
+  readonly borderColor?: string | MockThemeColor;
+  /** Optional CSS border style (`'solid'`, etc.). */
+  readonly borderStyle?: string;
+  /** Optional CSS border width (`'0 0 0 1px'`, etc.). */
+  readonly borderWidth?: string;
+  /** Optional CSS opacity string (`'0.58'`, etc.). */
+  readonly opacity?: string;
+}
+
+/** Mock `vscode.TextEditorDecorationType` handle recording options and disposal state. */
+export interface MockTextEditorDecorationType {
+  /** Marks this decoration type disposed. */
+  readonly dispose: () => void;
+  /** Whether `dispose()` has been called. */
+  isDisposed: boolean;
+  /** Unique decoration type key (`'deco-1'`, `'deco-2'`, etc.). */
+  readonly key: string;
+  /** Render options supplied to `window.createTextEditorDecorationType`. */
+  readonly options: MockDecorationRenderOptions;
+}
+
+/** Mock `vscode.TextEditor` recording applied decoration ranges and visible viewport ranges. */
+export interface MockTextEditor {
+  /** Applied decoration ranges keyed by `MockTextEditorDecorationType.key`. */
+  readonly decorations: Map<string, readonly MockRange[]>;
+  /** Underlying open text document. */
+  readonly document: MockTextDocument;
+  /** Reads the most recent `MockRange[]` applied for `decorationType`. */
+  readonly getDecorations: (decorationType: MockTextEditorDecorationType) => readonly MockRange[];
+  /** Applies `ranges` for `decorationType` on this editor. */
+  readonly setDecorations: (
+    decorationType: MockTextEditorDecorationType,
+    ranges: readonly MockRange[]
+  ) => void;
+  /** Currently visible viewport line spans in this editor. */
+  visibleRanges: readonly MockRange[];
+}
+
+/** Event payload emitted on `window.onDidChangeTextEditorVisibleRanges`. */
+export interface MockTextEditorVisibleRangesChangeEvent {
+  /** Editor whose viewport ranges changed. */
+  readonly textEditor: MockTextEditor;
+  /** Updated visible ranges on `textEditor`. */
+  readonly visibleRanges: readonly MockRange[];
 }
 
 /** Input options for `openMockDocument`. */
@@ -757,6 +816,18 @@ const warningMessagesState: RecordedToastMessage[] = [];
 /** Recorded QuickPick item arrays passed to `window.showQuickPick`. */
 const quickPicksState: (readonly unknown[])[] = [];
 
+/** Created `TextEditorDecorationType` instances retained for test inspection. */
+const decorationTypesState: MockTextEditorDecorationType[] = [];
+
+/** Open visible `MockTextEditor` instances backing `window.visibleTextEditors`. */
+const visibleEditorsState: MockTextEditor[] = [];
+
+/** Currently focused `MockTextEditor` backing `window.activeTextEditor`. */
+let activeEditorState: MockTextEditor | undefined = undefined;
+
+/** Monotonic counter generating unique `MockTextEditorDecorationType.key` values. */
+let nextDecorationId = 1;
+
 /** Optional scripted button choice returned by the next `showErrorMessage` / `showWarningMessage` / `showQuickPick`. */
 let nextDialogChoiceState: string | undefined = undefined;
 
@@ -782,9 +853,7 @@ const providerRegistryState: MockProviderRegistry = {
 
 // -------------------- Factory Constructors --------------------
 
-/**
- * Instantiates a typed `MockEventEmitter<T>` without `class` syntax.
- */
+/** Instantiates a typed `MockEventEmitter<T>` without `class` syntax. */
 function buildEventEmitter<T = undefined>(): MockEventEmitter<T> {
   const listeners = new Set<(eventValue: T) => unknown>();
   return {
@@ -828,6 +897,12 @@ let foldersEmitter = buildEventEmitter();
 
 /** Event emitter backing `vscode.workspace.onDidChangeConfiguration`. */
 let configEmitter = buildEventEmitter<MockConfigurationChangeEvent>();
+
+/** Event emitter backing `vscode.window.onDidChangeActiveTextEditor`. */
+let activeEditorEmitter = buildEventEmitter<MockTextEditor | undefined>();
+
+/** Event emitter backing `vscode.window.onDidChangeTextEditorVisibleRanges`. */
+let visibleRangesEmitter = buildEventEmitter<MockTextEditorVisibleRangesChangeEvent>();
 
 /**
  * Normalizes a `file://` URL string so drive letters are lowercase (`file:///d:/…`).
@@ -946,9 +1021,7 @@ function createEolTextEdit(eol: number): MockTextEdit {
   return { eol, newText: '', range: createRange(createPosition(0, 0), createPosition(0, 0)) };
 }
 
-/**
- * Constructor function backing `WorkspaceEdit`.
- */
+/** Constructor function backing `WorkspaceEdit`. */
 function createWorkspaceEdit(): MockWorkspaceEdit {
   const editMap = new Map<string, [MockUri, MockTextEdit[]]>();
   return {
@@ -1112,9 +1185,7 @@ function createSignatureInformation(
   return { documentation, label, parameters: [] };
 }
 
-/**
- * Constructor function backing `SignatureHelp`.
- */
+/** Constructor function backing `SignatureHelp`. */
 function createSignatureHelp(): MockSignatureHelp {
   return { activeParameter: 0, activeSignature: 0, signatures: [] };
 }
@@ -1459,6 +1530,9 @@ export const workspace = {
 
 /** Mock `vscode.window` namespace. */
 export const window = {
+  get activeTextEditor(): MockTextEditor | undefined {
+    return activeEditorState;
+  },
   createOutputChannel(channelName: string): MockOutputChannel {
     const lines: string[] = [];
     const channel: MockOutputChannel = {
@@ -1510,6 +1584,28 @@ export const window = {
     statusBarItemsState.push(item);
     return item;
   },
+  createTextEditorDecorationType(
+    options: MockDecorationRenderOptions
+  ): MockTextEditorDecorationType {
+    const key = `deco-${nextDecorationId}`;
+    nextDecorationId += 1;
+    const decorationType: MockTextEditorDecorationType = {
+      dispose(): void {
+        decorationType.isDisposed = true;
+      },
+      isDisposed: false,
+      key,
+      options,
+    };
+    decorationTypesState.push(decorationType);
+    return decorationType;
+  },
+  get onDidChangeActiveTextEditor(): MockEvent<MockTextEditor | undefined> {
+    return activeEditorEmitter.event;
+  },
+  get onDidChangeTextEditorVisibleRanges(): MockEvent<MockTextEditorVisibleRangesChangeEvent> {
+    return visibleRangesEmitter.event;
+  },
   showErrorMessage(message: string, ...items: string[]): Promise<string | undefined> {
     errorMessagesState.push({ items, message });
     const chosen = nextDialogChoiceState;
@@ -1535,6 +1631,9 @@ export const window = {
     const chosen = nextDialogChoiceState;
     nextDialogChoiceState = undefined;
     return Promise.resolve(chosen);
+  },
+  get visibleTextEditors(): readonly MockTextEditor[] {
+    return visibleEditorsState;
   },
 };
 
@@ -1679,6 +1778,10 @@ export function resetVscodeMock(): void {
   errorMessagesState.length = 0;
   warningMessagesState.length = 0;
   quickPicksState.length = 0;
+  decorationTypesState.length = 0;
+  visibleEditorsState.length = 0;
+  activeEditorState = undefined;
+  nextDecorationId = 1;
   nextDialogChoiceState = undefined;
   for (const key of Object.keys(providerRegistryState) as (keyof MockProviderRegistry)[]) {
     providerRegistryState[key].length = 0;
@@ -1690,6 +1793,8 @@ export function resetVscodeMock(): void {
   trustEmitter.dispose();
   foldersEmitter.dispose();
   configEmitter.dispose();
+  activeEditorEmitter.dispose();
+  visibleRangesEmitter.dispose();
   openDocEmitter = buildEventEmitter<MockTextDocument>();
   changeDocEmitter = buildEventEmitter<MockTextDocumentChangeEvent>();
   saveDocEmitter = buildEventEmitter<MockTextDocument>();
@@ -1697,6 +1802,8 @@ export function resetVscodeMock(): void {
   trustEmitter = buildEventEmitter();
   foldersEmitter = buildEventEmitter();
   configEmitter = buildEventEmitter<MockConfigurationChangeEvent>();
+  activeEditorEmitter = buildEventEmitter<MockTextEditor | undefined>();
+  visibleRangesEmitter = buildEventEmitter<MockTextEditorVisibleRangesChangeEvent>();
 }
 
 /**
@@ -1772,6 +1879,11 @@ export function openMockDocument(options: OpenMockDocumentOptions): MockTextDocu
       return documentBuffers.get(document) ?? '';
     },
     languageId: options.languageId ?? 'corex',
+    lineAt(line: number): MockTextLine {
+      const lines = document.getText().split(DOC_LINE_SPLIT_RX);
+      const clampedIdx = Math.max(0, Math.min(lines.length - 1, Math.trunc(line)));
+      return { lineNumber: clampedIdx, text: lines[clampedIdx] ?? '' };
+    },
     lineCount: options.text.split(DOC_LINE_SPLIT_RX).length,
     uri: docUri,
     version: options.version ?? 1,
@@ -1794,8 +1906,7 @@ export function changeMockDocument(
   nextText: string,
   changeRange?: MockRange
 ): void {
-  const prevText = document.getText();
-  const prevLines = prevText.split(DOC_LINE_SPLIT_RX);
+  const prevLines = document.getText().split(DOC_LINE_SPLIT_RX);
   const lastLineIdx = Math.max(0, prevLines.length - 1);
   const fullSpan = createRange(
     createPosition(0, 0),
@@ -1872,11 +1983,61 @@ export function setNextDialogChoice(choice: string | undefined): void {
   nextDialogChoiceState = choice;
 }
 
+/**
+ * Opens a `MockTextEditor` for `document`, sets it as active, and fires `onDidChangeActiveTextEditor`.
+ *
+ * @param document        Open mock text document to display.
+ * @param visibleRanges   Optional initial visible ranges (defaults to the entire document).
+ */
+export function openMockTextEditor(
+  document: MockTextDocument,
+  visibleRanges?: readonly MockRange[]
+): MockTextEditor {
+  const decorations = new Map<string, readonly MockRange[]>();
+  const lastLine = Math.max(0, document.lineCount - 1);
+  const editor: MockTextEditor = {
+    decorations,
+    document,
+    getDecorations(decorationType: MockTextEditorDecorationType): readonly MockRange[] {
+      return decorations.get(decorationType.key) ?? [];
+    },
+    setDecorations(
+      decorationType: MockTextEditorDecorationType,
+      ranges: readonly MockRange[]
+    ): void {
+      decorations.set(decorationType.key, [...ranges]);
+    },
+    visibleRanges: visibleRanges ?? [
+      createRange(0, 0, lastLine, document.lineAt(lastLine).text.length),
+    ],
+  };
+  visibleEditorsState.push(editor);
+  activeEditorState = editor;
+  activeEditorEmitter.fire(editor);
+  return editor;
+}
+
+/**
+ * Updates `editor.visibleRanges` and broadcasts `window.onDidChangeTextEditorVisibleRanges`.
+ *
+ * @param editor          Target mock editor.
+ * @param visibleRanges   Replacement viewport line ranges.
+ */
+export function setMockEditorVisibleRanges(
+  editor: MockTextEditor,
+  visibleRanges: readonly MockRange[]
+): void {
+  editor.visibleRanges = [...visibleRanges];
+  visibleRangesEmitter.fire({ textEditor: editor, visibleRanges: editor.visibleRanges });
+}
+
 /** Returns live references to recorded UI surfaces, providers, commands, and watchers. */
 export function getMockState() {
   return {
     collections: diagnosticCollectionsState,
     commands: commandHandlersState,
+    decorationTypes: decorationTypesState,
+    editors: visibleEditorsState,
     errorMessages: errorMessagesState,
     outputChannels: outputChannelsState,
     providers: providerRegistryState,

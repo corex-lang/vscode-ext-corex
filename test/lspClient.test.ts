@@ -47,8 +47,11 @@ import {
   EndOfLine,
   getMockState,
   openMockDocument,
+  openMockTextEditor,
   Position,
+  Range,
   resetVscodeMock,
+  setMockEditorVisibleRanges,
   setNextDialogChoice,
   setWorkspaceConfig,
   setWorkspaceFolders,
@@ -103,17 +106,17 @@ const EXT_ROOT = path.resolve(import.meta.dirname, '..');
 /** Sibling CoreX compiler repository root (`D:\GitHub\corex`). */
 const COREX_ROOT = path.resolve(EXT_ROOT, '..', 'corex');
 
-/** Canonical valid `.cx` module fixture exercising doc comments, contracts, calls, and locals. */
+/** Canonical valid `.cx` module fixture exercising comments, contracts, calls, and locals. */
 const VALID_MAIN_CX = [
-  '//! Verification sample module.',
+  '// Verification sample module.',
   '',
-  '/// Computes the wrapping sum of two 32-bit signed integers.',
+  '// Computes the wrapping sum of two 32-bit signed integers.',
   '@no_alloc @no_panic',
   'pub fn add_pair(left_val: i32, right_val: i32) -> i32 {',
   '    return left_val +% right_val;',
   '}',
   '',
-  '/// Entry point combining paired sums.',
+  '// Entry point combining paired sums.',
   'pub fn main() -> i32 {',
   '    let total = add_pair(10, 21);',
   '    return add_pair(total, total);',
@@ -182,30 +185,30 @@ function readTooltipValue(rawTooltip: string | MockMarkdownString | undefined): 
 }
 
 /**
- * Pauses for `delayMs` milliseconds when polling asynchronous notifications or status transitions.
+ * Pauses for `delay` (ms) when polling asynchronous notifications or status transitions.
  *
- * @param delayMs   Sleep duration in milliseconds.
+ * @param delay   Sleep duration (ms).
  */
-function sleepMs(delayMs: number): Promise<void> {
+function sleep(delay: number): Promise<void> {
   return new Promise((resolve) => {
-    setTimeout(resolve, delayMs);
+    setTimeout(resolve, delay);
   });
 }
 
 /**
- * Polls `predicate` every `20 ms` up to `timeoutMs`, throwing if not satisfied in time.
+ * Polls `predicate` every `20 ms` up to `timeout` (ms), throwing if not satisfied in time.
  *
  * @param predicate   Condition callback returning `true` when ready.
  * @param label       Diagnostic label included in timeout errors.
- * @param timeoutMs   Maximum wait ceiling in milliseconds (`5000` by default).
+ * @param timeout     Maximum wait ceiling (ms; `5000` by default).
  */
-async function waitUntil(predicate: () => boolean, label: string, timeoutMs = 5000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+async function waitUntil(predicate: () => boolean, label: string, timeout = 5000): Promise<void> {
+  const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     if (predicate()) {
       return;
     }
-    await sleepMs(20);
+    await sleep(20);
   }
   throw new Error(`Timed out waiting for condition: ${label}`);
 }
@@ -737,7 +740,7 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     setWorkspaceFolders([EXT_ROOT]);
 
     activate(createMockExtensionContext());
-    await sleepMs(60);
+    await sleep(60);
 
     const mockState = getMockState();
     expect(mockState.providers.hover).toHaveLength(0);
@@ -752,7 +755,7 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     );
 
     await commands.executeCommand('corex.restartServer');
-    await sleepMs(20);
+    await sleep(20);
     expect(mockState.warningMessages[0]?.message).toBe('Grant Workspace Trust to run CoreX.');
   });
 
@@ -981,8 +984,7 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     watcher?.fireCreate(watchedSrcUri);
 
     await waitUntil(() => {
-      const lines = getMockState().outputChannels[0]?.lines ?? [];
-      for (const line of lines) {
+      for (const line of getMockState().outputChannels[0]?.lines ?? []) {
         if (line.includes('workspace/didChangeWatchedFiles')) {
           return true;
         }
@@ -993,5 +995,172 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     const allLogs = (getMockState().outputChannels[0]?.lines ?? []).join('\n');
     expect(allLogs).toContain(watchedSrcUri.toString());
     expect(allLogs).not.toContain(ignoredBuildUri.toString());
+  });
+
+  it('renders 1px multiline strip-margin guides at closing quote column C > 0 across visibleRanges', async () => {
+    setWorkspaceTrusted(false);
+    setWorkspaceFolders([EXT_ROOT]);
+
+    const plainNonCxDoc = openMockDocument({
+      fsPath: path.join(EXT_ROOT, 'README.txt'),
+      languageId: 'plaintext',
+      text: 'let ignored = "\n    plain\n    ";\n',
+    });
+    openMockTextEditor(plainNonCxDoc);
+
+    activate(createMockExtensionContext());
+    await sleep(60);
+    expect(getMockState().decorationTypes).toHaveLength(0);
+
+    const multilineCxText = [
+      'pub fn build_query() {', // 0
+      '    let sql = "', // 1 (opens plain multiline)
+      '    SELECT id', // 2 (len >= 4 -> guide at col 4)
+      '', // 3 (len 0 < 4 -> skipped)
+      '    FROM accounts', // 4 (len >= 4 -> guide at col 4)
+      '    ";', // 5 (closes at colC = 4)
+      '    let fmt_msg = f#"', // 6 (opens f#" multiline)
+      '      row: {id}', // 7 (len >= 6 -> guide at col 6)
+      '      "#;', // 8 (closes at colC = 6)
+      '    let col_zero = "', // 9 (opens plain multiline)
+      'no_margin', // 10
+      '";', // 11 (closes at colC = 0 -> no strip guide)
+      '}', // 12
+    ].join('\n');
+
+    const cxDoc = openMockDocument({
+      fsPath: path.join(EXT_ROOT, 'multiline_guides.cx'),
+      text: multilineCxText,
+    });
+    const cxEditor = openMockTextEditor(cxDoc);
+
+    await waitUntil(
+      () => getMockState().decorationTypes.length === 2,
+      'lazy decoration type creation on .cx editor'
+    );
+
+    const [stripDeco, mutedDeco] = getMockState().decorationTypes;
+    expect(stripDeco?.options.borderWidth).toBe('0 0 0 1px');
+    expect(stripDeco?.options.borderStyle).toBe('solid');
+    expect(stripDeco?.options.borderColor).toEqual({ id: 'editorIndentGuide.activeBackground1' });
+    expect(mutedDeco?.options.opacity).toBe('0.58');
+
+    if (stripDeco === undefined || mutedDeco === undefined) {
+      throw new Error('Expected stripGuideDecoration and mutedDimDecoration.');
+    }
+
+    expect(cxEditor.getDecorations(stripDeco)).toEqual([
+      new Range(2, 4, 2, 4),
+      new Range(4, 4, 4, 4),
+      new Range(7, 6, 7, 6),
+    ]);
+
+    // Restrict viewport to lines 4..8; opening `"` on line 1 is paired via lookback context:
+    setMockEditorVisibleRanges(cxEditor, [new Range(4, 0, 8, 9)]);
+    await sleep(60);
+
+    expect(cxEditor.getDecorations(stripDeco)).toEqual([
+      new Range(4, 4, 4, 4),
+      new Range(7, 6, 7, 6),
+    ]);
+
+    // Verify trailing spaces after `"` and `f"…{{…"` / nested `{…}` at EOL never misfire as multiline openers:
+    changeMockDocument(
+      cxDoc,
+      [
+        'pub fn edge_cases() {', // 0
+        '    let trailing_sp = "   ', // 1: trailing spaces -> NOT multiline
+        '    let _dim_after_sp = 1;', // 2: `_dim_after_sp` at [8, 21)
+        '    ";', // 3: does NOT pair with line 1
+        '    let esc_brace = f"escaped {{ _not_dimmed"', // 4: `{{` + closing `"` at EOL -> NOT multiline
+        '    let _dim_after_esc = 2;', // 5: `_dim_after_esc` at [8, 22)
+        '    let nested_brace = f"{Pt { x: 1, label: "}" }} _not_dimmed"', // 6: nested `{…}` at EOL -> NOT multiline
+        '    let _dim_after_nested = 3;', // 7: `_dim_after_nested` at [8, 25)
+        '    let ok_multi = "', // 8: opens genuine multiline string at EOL
+        '    margin_body', // 9: strip guide at col 4
+        '    ";', // 10: closes at colC = 4
+        '}', // 11
+      ].join('\n')
+    );
+    setMockEditorVisibleRanges(cxEditor, [new Range(0, 0, 11, 1)]);
+    await sleep(60);
+
+    expect(cxEditor.getDecorations(stripDeco)).toEqual([new Range(9, 4, 9, 4)]);
+    expect(cxEditor.getDecorations(mutedDeco)).toEqual([
+      new Range(2, 8, 2, 21),
+      new Range(5, 8, 5, 22),
+      new Range(7, 8, 7, 25),
+    ]);
+
+    // Verify non-backtracking O(n) decoration scan on 4000-quote unclosed f"{ adversarial lines:
+    const redosStart = performance.now();
+    changeMockDocument(
+      cxDoc,
+      [`f"{${'"'.repeat(4000)}`, `f"{${"'".repeat(4000)}`, 'let _still_dimmed = 0;'].join('\n')
+    );
+    await sleep(55);
+    expect(performance.now() - redosStart).toBeLessThan(250);
+    expect(cxEditor.getDecorations(mutedDeco)).toEqual([new Range(2, 4, 2, 17)]);
+
+    await deactivate();
+    expect(stripDeco.isDisposed).toBe(true);
+    expect(mutedDeco.isDisposed).toBe(true);
+  });
+
+  it('dims pure _ = ident; discards and _unused code tokens at 0.58 opacity while skipping calls, strings, and comments', async () => {
+    setWorkspaceTrusted(false);
+    setWorkspaceFolders([EXT_ROOT]);
+
+    const dimSource = [
+      '/# Module header with _not_in_mod_doc', // 0
+      '/| Item doc with _not_in_item_doc', // 1
+      'pub fn check(_unused_arg: i32, active: i32) -> i32 {', // 2: `_unused_arg` at [13, 24)
+      '    let _scratch = active + 1;', // 3: `_scratch` at [8, 16)
+      '    _ = active;', // 4: `_ = active;` at [4, 15)
+      '    _ = _scratch; // trailing _not_in_line_comment', // 5: `_ = _scratch;` at [4, 17)
+      '    _ = run_side_effect(active);', // 6: side-effecting call -> NOT dimmed
+      '    _ = ptr.*;', // 7: dereference -> NOT dimmed
+      '    let plain_lit = "_not_in_plain";', // 8: inside plain string -> NOT dimmed
+      '    let raw_lit = r#"raw "_not_in_raw" end"#;', // 9: inside raw string -> NOT dimmed
+      '    let fmt_lit = f"head {"_not_in_nested"} _not_in_fmt";', // 10: inside f-string -> NOT dimmed
+      '    /* retired _not_in_block */ let _after_block = 0;', // 11: `_after_block` at [36, 48)
+      '    return active;', // 12
+      '}', // 13
+    ].join('\n');
+
+    const cxDoc = openMockDocument({
+      fsPath: path.join(EXT_ROOT, 'dimming_rules.cx'),
+      text: dimSource,
+    });
+    const cxEditor = openMockTextEditor(cxDoc);
+
+    activate(createMockExtensionContext());
+    await waitUntil(
+      () => getMockState().decorationTypes.length === 2,
+      'mutedDimDecoration applied on .cx editor'
+    );
+    await sleep(50);
+
+    const [, mutedDeco] = getMockState().decorationTypes;
+    expect(mutedDeco?.options.opacity).toBe('0.58');
+    if (mutedDeco === undefined) {
+      throw new Error('Expected mutedDimDecoration.');
+    }
+
+    expect(cxEditor.getDecorations(mutedDeco)).toEqual([
+      new Range(2, 13, 2, 24),
+      new Range(3, 8, 3, 16),
+      new Range(4, 4, 4, 15),
+      new Range(5, 4, 5, 17),
+      new Range(11, 36, 11, 48),
+    ]);
+
+    changeMockDocument(cxDoc, 'pub fn minimal(_only_one: u32) {\n    _ = _only_one;\n}\n');
+    await sleep(60);
+
+    expect(cxEditor.getDecorations(mutedDeco)).toEqual([
+      new Range(0, 15, 0, 24),
+      new Range(1, 4, 1, 18),
+    ]);
   });
 });

@@ -7,6 +7,7 @@
  * Caches the resolved snapshot until explicitly invalidated on `onDidChangeConfiguration`.
  */
 
+import { splitCsv } from '@/binary';
 import { isStr } from '@/client';
 import type {
   ExtensionConfig,
@@ -24,8 +25,11 @@ export const COREX_CONFIG_SECTION = 'corex';
 /** Setting key for explicit `corex` binary path under `corex.*`. */
 export const EXEC_PATH_KEY = 'executablePath';
 
+/** Shared `'enable'` setting suffix. */
+const ENABLE_KEY = 'enable';
+
 /** Setting key for editor inlay hints under `corex.*`. */
-export const INLAY_HINTS_KEY = 'inlayHints.enable';
+export const INLAY_HINTS_KEY = `inlayHints.${ENABLE_KEY}`;
 
 /** Canonical default values matching `package.json` `contributes.configuration`. */
 export const DEFAULT_EXTENSION_CONFIG: ExtensionConfig = {
@@ -39,8 +43,8 @@ export const DEFAULT_EXTENSION_CONFIG: ExtensionConfig = {
 };
 
 /** Keys whose changes require restarting `corex lsp` (sorted alphabetically). */
-const RESTART_KEYS = 'executablePath,internalCore,isEnabled,isLspEnabled'.split(
-  ','
+const RESTART_KEYS = splitCsv(
+  'executablePath,internalCore,isEnabled,isLspEnabled'
 ) as readonly (keyof ExtensionConfig)[];
 
 // -------------------------------------- INTERNALS --------------------------------------
@@ -54,7 +58,7 @@ let cachedConfig: ExtensionConfig | undefined = undefined;
  * @param csv   Comma-separated valid enum values.
  */
 function buildEnumGuard<T extends string>(csv: string): (value: unknown) => value is T {
-  const validSet: ReadonlySet<string> = new Set(csv.split(','));
+  const validSet: ReadonlySet<string> = new Set(splitCsv(csv));
   return (value): value is T => isStr(value) && validSet.has(value);
 }
 
@@ -90,22 +94,21 @@ export function invalidateConfigCache(): void {
 
 /** Reads, validates, and caches all `corex.*` workspace configuration settings. */
 export function readExtensionConfig(): ExtensionConfig {
-  if (cachedConfig !== undefined) {
-    return cachedConfig;
+  if (!cachedConfig) {
+    const configView = vsWorkspace.getConfiguration(COREX_CONFIG_SECTION);
+    const rawExec = configView.get(EXEC_PATH_KEY);
+    const rawMode = configView.get('internalCore');
+    const rawTrace = configView.get('trace.server');
+    cachedConfig = {
+      executablePath: isStr(rawExec) ? rawExec : '',
+      internalCore: isInternalCoreMode(rawMode) ? rawMode : 'auto',
+      isEnabled: configView.get(ENABLE_KEY) !== false,
+      isFormatEnabled: configView.get(`format.${ENABLE_KEY}`) !== false,
+      isInlayHintsEnabled: configView.get(INLAY_HINTS_KEY) === true,
+      isLspEnabled: configView.get(`lsp.${ENABLE_KEY}`) !== false,
+      traceServer: isTraceServerMode(rawTrace) ? rawTrace : 'off',
+    };
   }
-  const configView = vsWorkspace.getConfiguration(COREX_CONFIG_SECTION);
-  const rawExec = configView.get(EXEC_PATH_KEY);
-  const rawMode = configView.get('internalCore');
-  const rawTrace = configView.get('trace.server');
-  cachedConfig = {
-    executablePath: isStr(rawExec) ? rawExec : '',
-    internalCore: isInternalCoreMode(rawMode) ? rawMode : 'auto',
-    isEnabled: configView.get('enable') !== false,
-    isFormatEnabled: configView.get('format.enable') !== false,
-    isInlayHintsEnabled: configView.get(INLAY_HINTS_KEY) === true,
-    isLspEnabled: configView.get('lsp.enable') !== false,
-    traceServer: isTraceServerMode(rawTrace) ? rawTrace : 'off',
-  };
   return cachedConfig;
 }
 

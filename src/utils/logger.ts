@@ -7,15 +7,17 @@
  * Truncates untrusted error details and trace payloads to bounded sizes using monochrome glyphs.
  */
 
-import { window } from 'vscode';
+// oxlint-disable-next-line unicorn/prefer-export-from -- value binding avoids esbuild CJS getter re-export overhead
+import { window, workspace } from 'vscode';
 import type { OutputChannel } from 'vscode';
-
-export { workspace as vsWorkspace } from 'vscode';
 
 // --------------------------------------- CONSTS ----------------------------------------
 
 /** Shared mangleable alias for `vscode.window`. */
 export const vsWindow = window;
+
+/** Shared mangleable alias for `vscode.workspace`. */
+export const vsWorkspace = workspace;
 
 // -------------------------------------- INTERNALS --------------------------------------
 
@@ -24,8 +26,7 @@ let outputChannel: OutputChannel | undefined = undefined;
 
 /** Returns the `CoreX` output channel, creating it lazily on first access. */
 function ensureChannel(): OutputChannel {
-  outputChannel ??= vsWindow.createOutputChannel('CoreX');
-  return outputChannel;
+  return (outputChannel ??= vsWindow.createOutputChannel('CoreX'));
 }
 
 /**
@@ -39,10 +40,19 @@ function ensureChannel(): OutputChannel {
 function appendLogLine(glyph: string, message: string, detail?: unknown, maxLength = 4096): void {
   let suffix = '';
   if (detail !== undefined && detail !== null) {
-    const text = detail instanceof Error ? (detail.stack ?? detail.message) : String(detail);
+    const text = detail instanceof Error ? (detail.stack ?? detail.message) : `${detail}`;
     suffix = `\n${text.length <= maxLength ? text : `${text.slice(0, maxLength)}…`}`;
   }
   ensureChannel().appendLine(`[${new Date().toISOString()}] ${glyph} ${message}${suffix}`);
+}
+
+/**
+ * Creates a logger function bound to `glyph`.
+ *
+ * @param glyph   Monochrome prefix symbol (`•`, `⚠`, `✗`).
+ */
+function bindLogger(glyph: string): (message: string, error?: unknown) => void {
+  return (message, error) => appendLogLine(glyph, message, error);
 }
 
 // ------------------------------------- PUBLIC API --------------------------------------
@@ -61,34 +71,14 @@ export function showOutputChannel(isPreservingFocus = false): void {
   ensureChannel().show(isPreservingFocus);
 }
 
-/**
- * Appends an informational lifecycle message to the `CoreX` output channel.
- *
- * @param message   Lifecycle event summary.
- */
-export function logInfo(message: string): void {
-  appendLogLine('•', message);
-}
+/** Appends an informational lifecycle message to the `CoreX` output channel. */
+export const logInfo = bindLogger('•');
 
-/**
- * Appends a non-fatal warning message to the `CoreX` output channel.
- *
- * @param message   Warning description.
- * @param error     Optional underlying error cause.
- */
-export function logWarn(message: string, error?: unknown): void {
-  appendLogLine('⚠', message, error);
-}
+/** Appends a non-fatal warning message to the `CoreX` output channel. */
+export const logWarn = bindLogger('⚠');
 
-/**
- * Appends an error message to the `CoreX` output channel.
- *
- * @param message   Error description.
- * @param error     Optional underlying error cause.
- */
-export function logError(message: string, error?: unknown): void {
-  appendLogLine('✗', message, error);
-}
+/** Appends an error message to the `CoreX` output channel. */
+export const logError = bindLogger('✗');
 
 /**
  * Appends a JSON-RPC 2.0 traffic trace entry to the `CoreX` output channel.

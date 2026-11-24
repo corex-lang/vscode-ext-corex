@@ -3,7 +3,7 @@
  *
  * Loads live `vscode-oniguruma` (`onig.wasm`) and `vscode-textmate` grammars for `source.corex`
  * and `markdown.corex.codeblock`, verifying all 3 scope invariants across `../corex/core/` modules,
- * `../corex/docs/COMPARISONS.md` showcases, and the complete `DR-22` lexical taxonomy.
+ * `../corex/docs/COMPARISONS.md` showcases, and the complete `DR-22` / `DR-24` lexical taxonomy.
  *
  * Enforces `< 50 ms` non-backtracking execution across 4000-character adversarial inputs.
  */
@@ -193,7 +193,7 @@ const PRIMITIVE_TYPES = [
   'usize',
 ] as const;
 
-/** Canonical 12 built-in Constrained Type Groups (`support.type.group.corex`). */
+/** Canonical 13 built-in Constrained Type Groups (`support.type.group.corex`). */
 const CONSTRAINED_TYPE_GROUPS = [
   'Bytes',
   'Comparable',
@@ -206,6 +206,7 @@ const CONSTRAINED_TYPE_GROUPS = [
   'Number',
   'Scalar',
   'Signed',
+  'TrivialDrop',
   'Unsigned',
 ] as const;
 
@@ -249,9 +250,8 @@ let grammarRegistry: Registry | undefined = undefined;
  * @param dirPath   Root directory to scan.
  */
 async function collectCxFiles(dirPath: string): Promise<string[]> {
-  const entries = await readdir(dirPath, { withFileTypes: true });
   const results: string[] = [];
-  for (const entry of entries) {
+  for (const entry of await readdir(dirPath, { withFileTypes: true })) {
     const fullPath = path.resolve(dirPath, entry.name);
     if (entry.isDirectory()) {
       for (const nested of await collectCxFiles(fullPath)) {
@@ -523,9 +523,8 @@ describe('Corpus scope invariants – ../corex/{core,stdlib/cx}/**/*.cx and ../c
       '~~~',
     ].join('\n');
 
-    const mdTokens = tokenizeNonWhitespace(getMarkdownGrammar(), markdownSample);
     const embeddedTokens: ScopedLexeme[] = [];
-    for (const token of mdTokens) {
+    for (const token of tokenizeNonWhitespace(getMarkdownGrammar(), markdownSample)) {
       if (hasScopeMatching(token, 'meta.embedded.block.corex')) {
         embeddedTokens.push(token);
       }
@@ -617,9 +616,9 @@ describe('DR-22 keywords, primitives, contextual keywords, and Constrained Type 
     expect(findToken(negTokens, 'true_flag', 0).leafScope).toBe('variable.other.readwrite.corex');
   });
 
-  it('tokenizes all 20 primitive types (including opaque) and all 12 Constrained Type Groups', () => {
+  it('tokenizes all 20 primitive types (including opaque) and all 13 Constrained Type Groups', () => {
     expect(PRIMITIVE_TYPES).toHaveLength(20);
-    expect(CONSTRAINED_TYPE_GROUPS).toHaveLength(12);
+    expect(CONSTRAINED_TYPE_GROUPS).toHaveLength(13);
 
     const primLines: string[] = [];
     for (let i = 0; i < PRIMITIVE_TYPES.length; i += 1) {
@@ -764,7 +763,7 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
     expect(findToken(tokens, 'Reset', 1).leafScope).toBe('variable.other.enummember.corex');
   });
 
-  it('scopes @attr(key: val), @size_of, #soa, shebang + TOML frontmatter, labels, and nested /* … */ comments', () => {
+  it('scopes @repr/@link, @size_of, #soa, shebang + TOML frontmatter, labels, and DR-24 /# & /| docstrings', () => {
     const scriptWithHeader = [
       '#!/usr/bin/env corex',
       '---',
@@ -776,14 +775,17 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
       'updated_at = 2026-11-20T12:00:00Z',
       'limit = +inf',
       '---',
-      '/* outer block /* nested middle /* inner leaf */ still comment */ end of block */',
+      '/| Computes stride across aligned SoA particle buffers.',
+      '@repr(C, align: .CacheLine, zero_pad: true)',
+      '@link(name: "cx_particle", section: ".rodata")',
+      'pub struct Particle { pub mass: f32 }',
       '@deprecated(since: "0.2.0", reason: "legacy")',
       'pub fn compute(slice_soa: #soa &[Particle], raw_c: *c_void) -> usize {',
       '    let c_float = 1.0_f32;',
       '    let c_size_t = 0_usize;',
       '    _ = (raw_c, c_float, c_size_t);',
       '    errdefer |err| { _ = err; }',
-      '    let stride = @size_of[usize]();',
+      '    let stride = @size_of[usize]() + @align_of[Particle]();',
       '    fsm: match State.Idle {',
       '        .Idle => continue :fsm .Done,',
       '        .Done => break:fsm stride,',
@@ -817,11 +819,16 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
     expect(findToken(tokens, '|', 1).leafScope).toBe('punctuation.definition.parameters.end.corex');
 
     expect(findToken(tokens, '@', 0).leafScope).toBe('punctuation.definition.annotation.corex');
+    expect(findToken(tokens, 'repr').leafScope).toBe('storage.type.annotation.corex');
+    expect(findToken(tokens, 'C').leafScope).toBe('support.constant.attribute.corex');
+    expect(findToken(tokens, 'align').leafScope).toBe('variable.other.property.corex');
+    expect(findToken(tokens, 'CacheLine').leafScope).toBe('variable.other.enummember.corex');
+    expect(findToken(tokens, 'zero_pad').leafScope).toBe('variable.other.property.corex');
+    expect(findToken(tokens, 'link').leafScope).toBe('storage.type.annotation.corex');
     expect(findToken(tokens, 'deprecated').leafScope).toBe('storage.type.annotation.corex');
     expect(findToken(tokens, 'since').leafScope).toBe('variable.other.property.corex');
-
-    expect(findToken(tokens, '@', 1).leafScope).toBe('punctuation.definition.annotation.corex');
     expect(findToken(tokens, 'size_of').leafScope).toBe('storage.type.annotation.corex');
+    expect(findToken(tokens, 'align_of').leafScope).toBe('storage.type.annotation.corex');
 
     expect(findToken(tokens, '#', 1).leafScope).toBe('punctuation.definition.directive.corex');
     expect(findToken(tokens, 'soa').leafScope).toBe('storage.modifier.soa.corex');
@@ -830,7 +837,7 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
     expect(findToken(tokens, 'fsm', 1).leafScope).toBe('entity.name.label.corex');
     expect(findToken(tokens, 'fsm', 2).leafScope).toBe('entity.name.label.corex');
 
-    expect(findToken(tokens, 'pub').leafScope).toBe('storage.modifier.corex');
+    expect(findToken(tokens, 'pub', 0).leafScope).toBe('storage.modifier.corex');
     expect(findToken(tokens, 'compute').leafScope).toBe('entity.name.function.corex');
 
     const nonReenteringShebang = [
@@ -862,17 +869,18 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
     );
     expect(findToken(bareTokens, 'package').leafScope).toBe('entity.name.section.table.toml.corex');
 
-    const lineDocAndEmptyBlockSnippet = [
-      '//! Module doc header',
+    const lineDocAndOrdinarySlashSnippet = [
+      '/# Module doc header',
       '//// Banner divider comment (4 slashes)',
-      '/**/ /***/ /* regular /* nested */ block */',
-      '/// Outer item doc',
+      '///| Ordinary triple-slash pipe comment',
+      '///# Ordinary triple-slash hash comment',
+      '/| Outer item doc',
       'pub fn documented() {}',
     ].join('\n');
-    const validDocTokens = tokenizeNonWhitespace(getCorexGrammar(), lineDocAndEmptyBlockSnippet);
-    assertStrictCorexScopeInvariants('adr23a-valid-comments', validDocTokens);
-    expect(findToken(validDocTokens, '//!').leafScope).toBe(
-      'punctuation.definition.comment.documentation.corex'
+    const validDocTokens = tokenizeNonWhitespace(getCorexGrammar(), lineDocAndOrdinarySlashSnippet);
+    assertStrictCorexScopeInvariants('adr24a-valid-comments', validDocTokens);
+    expect(findToken(validDocTokens, '/#').leafScope).toBe(
+      'punctuation.definition.comment.documentation.module.corex'
     );
     expect(
       hasScopeMatching(
@@ -886,19 +894,38 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
         'comment.line.double-slash.corex'
       )
     ).toBe(true);
-    expect(findToken(validDocTokens, '///').leafScope).toBe(
+    expect(
+      hasScopeMatching(
+        findToken(validDocTokens, '/| Ordinary triple-slash pipe comment'),
+        'comment.line.double-slash.corex'
+      )
+    ).toBe(true);
+    expect(
+      hasScopeMatching(
+        findToken(validDocTokens, '/# Ordinary triple-slash hash comment'),
+        'comment.line.double-slash.corex'
+      )
+    ).toBe(true);
+    expect(findToken(validDocTokens, '/|').leafScope).toBe(
       'punctuation.definition.comment.documentation.corex'
     );
+    expect(
+      hasScopeMatching(
+        findToken(validDocTokens, ' Outer item doc'),
+        'comment.line.documentation.corex'
+      )
+    ).toBe(true);
 
     const markdownDocSnippet = [
-      '//! # Module Heading',
-      '//! Inline `Vec[u8]` and ``a `b` c`` with ***both***, ___uboth___, **bold**, __ubold__, *italic*, _emph_, ~~legacy~~, ~Copy (~10 ms), and [Spec](https://corex.dev).',
-      String.raw`//! Escapes: Hello\nworld! and \* in docs.`,
+      '/# # Module Heading',
+      '/# Inline `Vec[u8]` and ``a `b` c`` with ***both***, ___uboth___, **bold**, __ubold__, ' +
+        '*italic*, _emph_, ~~legacy~~, ~Copy (~10 ms), and [Spec](https://corex.dev).',
+      String.raw`/# Escapes: Hello\nworld! and \* in docs.`,
       String.raw`// Strip trailing \r\nbytes`,
       '// Inline `buf` with **care**',
-      '/// ```cx',
-      '/// let sample = 1;',
-      '/// ```',
+      '/| ```cx',
+      '/| let sample = 1;',
+      '/| ```',
       'pub fn doc_rich() {}',
     ].join('\n');
     const mdDocTokens = tokenizeNonWhitespace(getCorexGrammar(), markdownDocSnippet);
@@ -951,60 +978,167 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
     expect(findToken(mdDocTokens, 'cx').leafScope).toBe(
       'punctuation.definition.raw.markdown.corex'
     );
+    expect(findToken(mdDocTokens, 'let').leafScope).toBe('keyword.declaration.variable.corex');
+    expect(findToken(mdDocTokens, 'sample').leafScope).toBe('variable.other.readwrite.corex');
 
-    const bannedBlockDocs = tokenizeNonWhitespace(
+    const retiredCommentsAndAttrs = tokenizeNonWhitespace(
       getCorexGrammar(),
-      '/** banned outer /* nested */ doc */\n/*! banned inner doc */\npub fn after_doc() {}'
+      [
+        '/* inline retired */ let after_inline = 1;',
+        '/** retired outer /* nested */ block */',
+        '/*! retired inner block */',
+        '//! retired module doc',
+        '/// retired item doc',
+        '@align(16) @zero_pad @link_name("sym") @[legacy]',
+        'pub fn after_doc() {}',
+      ].join('\n')
     );
-    expect(findToken(bannedBlockDocs, '/**').leafScope).toBe(
-      'invalid.illegal.block-doc-comment.corex'
+    expect(findToken(retiredCommentsAndAttrs, '/*', 0).leafScope).toBe(
+      'invalid.illegal.retired-comment.corex'
     );
-    expect(findToken(bannedBlockDocs, '/*!').leafScope).toBe(
-      'invalid.illegal.block-doc-comment.corex'
+    expect(findToken(retiredCommentsAndAttrs, 'after_inline').leafScope).toBe(
+      'variable.other.readwrite.corex'
     );
-    expect(findToken(bannedBlockDocs, 'after_doc').leafScope).toBe('entity.name.function.corex');
+    expect(findToken(retiredCommentsAndAttrs, '/*', 1).leafScope).toBe(
+      'invalid.illegal.retired-comment.corex'
+    );
+    expect(findToken(retiredCommentsAndAttrs, '/*', 3).leafScope).toBe(
+      'invalid.illegal.retired-comment.corex'
+    );
+    expect(findToken(retiredCommentsAndAttrs, '//! retired module doc').leafScope).toBe(
+      'invalid.illegal.retired-comment.corex'
+    );
+    expect(findToken(retiredCommentsAndAttrs, '/// retired item doc').leafScope).toBe(
+      'invalid.illegal.retired-comment.corex'
+    );
+    expect(findToken(retiredCommentsAndAttrs, '@align').leafScope).toBe(
+      'invalid.illegal.retired-attribute.corex'
+    );
+    expect(findToken(retiredCommentsAndAttrs, '@zero_pad').leafScope).toBe(
+      'invalid.illegal.retired-attribute.corex'
+    );
+    expect(findToken(retiredCommentsAndAttrs, '@link_name').leafScope).toBe(
+      'invalid.illegal.retired-attribute.corex'
+    );
+    expect(findToken(retiredCommentsAndAttrs, '@[').leafScope).toBe(
+      'invalid.illegal.retired-attribute.corex'
+    );
+    expect(findToken(retiredCommentsAndAttrs, 'after_doc').leafScope).toBe(
+      'entity.name.function.corex'
+    );
+  });
+
+  it('prevents mid-line and unclosed /| or /# fenced code blocks from leaking state onto subsequent code lines', () => {
+    const docFenceLeakSnippet = [
+      'let mid_item = 1; /| ```cx',
+      'pub fn after_mid_item() {}',
+      'let mid_mod = 2; /# ```cx',
+      'pub fn after_mid_mod() {}',
+      '/| ```cx',
+      '/| let inside_unclosed_item = 3;',
+      'pub fn after_unclosed_item() {}',
+      '/# ~~~cx',
+      '/# let inside_unclosed_mod = 4;',
+      'pub fn after_unclosed_mod() {}',
+    ].join('\n');
+
+    const tokens = tokenizeNonWhitespace(getCorexGrammar(), docFenceLeakSnippet);
+    assertStrictCorexScopeInvariants('doc-fence-no-leak', tokens);
+
+    expect(findToken(tokens, 'inside_unclosed_item').leafScope).toBe(
+      'variable.other.readwrite.corex'
+    );
+    expect(
+      hasScopeMatching(findToken(tokens, 'inside_unclosed_item'), 'markup.raw.block.markdown.corex')
+    ).toBe(true);
+    expect(findToken(tokens, 'inside_unclosed_mod').leafScope).toBe(
+      'variable.other.readwrite.corex'
+    );
+    expect(
+      hasScopeMatching(findToken(tokens, 'inside_unclosed_mod'), 'markup.raw.block.markdown.corex')
+    ).toBe(true);
+
+    for (const fnName of [
+      'after_mid_item',
+      'after_mid_mod',
+      'after_unclosed_item',
+      'after_unclosed_mod',
+    ]) {
+      const fnToken = findToken(tokens, fnName);
+      expect(fnToken.leafScope).toBe('entity.name.function.corex');
+      expect(hasScopeMatching(fnToken, 'comment')).toBe(false);
+      expect(hasScopeMatching(fnToken, 'markup')).toBe(false);
+    }
   });
 });
 
 // --------- Strings, Interpolation, Numbers & Closures ---------
 
 describe('Strings, recursive {expr=:#06x} interpolation, numbers, and closure vs bitwise |', () => {
-  it('tokenizes all 10 string/raw-string/byte-string/char/byte-char forms and nested {expr=:#06x} interpolation', () => {
+  it('tokenizes ADR-24B multiline "<newline> … ", plain placeholders vs literal {{world}}, and f"…" / f#"…"# interpolation', () => {
     const literalsSnippet = [
       String.raw`let s_double = "hello {{world}} \n \x2A \u{03BB}";`,
-      'let s_triple = """',
+      'let s_multi = "',
+      '    plain line {tmpl_key}',
+      '    ";',
+      'let f_multi = f"',
       '    line one {1 + 2=:#06x}',
-      '    """;',
+      '    ";',
+      'let f_guarded_multi = f#"',
+      String.raw`    guarded "quotes" \n {{brace_ok}} {val=:#04x}`,
+      '    "#;',
       String.raw`let s_raw = r#"raw "quoted" \n no-escape"#;`,
-      'let s_raw_triple = r#"""',
-      '    raw multiline """body"""',
-      '    """#;',
+      'let s_raw_multi = r#"',
+      '    raw multiline "body"',
+      '    "#;',
       String.raw`let b_double = b"ascii \x7F \r\n";`,
-      'let b_triple = b"""',
+      'let b_multi = b"',
       String.raw`    cooked byte block \x00`,
-      '    """;',
+      '    ";',
       String.raw`let br_single = br#"raw \xFF bytes"#;`,
-      'let br_triple = br#"""',
+      'let br_multi = br#"',
       '    raw byte multiline',
-      '    """#;',
+      '    "#;',
       String.raw`let ch_utf8 = '\u{10348}';`,
       String.raw`let ch_byte = b'\x41';`,
-      String.raw`let plain_tmpl = "[{loc.file}:{loc.line}] = {value:?}\n";`,
-      'let nested_interp = f"outer {format_tag(f"inner {val=:#04x}")=}";',
+      String.raw`let plain_tmpl = "[{loc.file}:{loc.line}] = {value:?} {p}% /users/{id} {0}\n";`,
+      'let non_tmpl = "{} and if (len == 0) { return -1; }";',
+      'let nested_interp = f"outer {{lit}} {format_tag(f#"inner "q" {val=:#04x}"#)=} {if ok => "UP" else "DOWN"}";',
       'let var_specs = f"{x:?} {addr:#010x} {mask:08b} {ratio:.2f} {name:>12} {val:─^10} {self:#x} {true:?}";',
     ].join('\n');
 
     const tokens = tokenizeNonWhitespace(getCorexGrammar(), literalsSnippet);
     assertStrictCorexScopeInvariants('all-string-and-char-forms', tokens);
 
-    expect(findToken(tokens, '{{').leafScope).toBe('constant.character.escape.brace.corex');
-    expect(findToken(tokens, 'world').leafScope).toBe('string.quoted.double.corex');
-    expect(findToken(tokens, '}}').leafScope).toBe('constant.character.escape.brace.corex');
-    expect(findToken(tokens, '{1 + 2=:#06x}').leafScope).toBe('keyword.operator.placeholder.corex');
+    expect(findToken(tokens, 'hello ').leafScope).toBe('string.quoted.double.corex');
+    expect(findToken(tokens, '{{', 0).leafScope).toBe('string.quoted.double.corex');
+    expect(findToken(tokens, 'world}} ').leafScope).toBe('string.quoted.double.corex');
+    for (const tok of tokens) {
+      if (tok.line === 0) {
+        expect(tok.leafScope).not.toBe('constant.character.escape.brace.corex');
+        expect(tok.leafScope).not.toBe('keyword.operator.placeholder.corex');
+      }
+      if (tok.line === 27) {
+        expect(tok.leafScope).not.toBe('keyword.operator.placeholder.corex');
+      }
+    }
+
+    expect(findToken(tokens, '{tmpl_key}').leafScope).toBe('keyword.operator.placeholder.corex');
     expect(findToken(tokens, '{loc.file}').leafScope).toBe('keyword.operator.placeholder.corex');
     expect(findToken(tokens, '{loc.line}').leafScope).toBe('keyword.operator.placeholder.corex');
     expect(findToken(tokens, '{value:?}').leafScope).toBe('keyword.operator.placeholder.corex');
-    expect(findToken(tokens, ':#04x').leafScope).toBe('storage.type.format.corex');
+    expect(findToken(tokens, '{p}').leafScope).toBe('keyword.operator.placeholder.corex');
+    expect(findToken(tokens, '{id}').leafScope).toBe('keyword.operator.placeholder.corex');
+    expect(findToken(tokens, '{0}').leafScope).toBe('keyword.operator.placeholder.corex');
+
+    expect(findToken(tokens, '{{', 1).leafScope).toBe('constant.character.escape.brace.corex');
+    expect(findToken(tokens, '}}', 0).leafScope).toBe('constant.character.escape.brace.corex');
+    expect(findToken(tokens, '{{', 2).leafScope).toBe('constant.character.escape.brace.corex');
+    expect(findToken(tokens, '}}', 1).leafScope).toBe('constant.character.escape.brace.corex');
+    expect(findToken(tokens, ':#06x').leafScope).toBe('storage.type.format.corex');
+    expect(findToken(tokens, ':#04x', 0).leafScope).toBe('storage.type.format.corex');
+    expect(findToken(tokens, ':#04x', 1).leafScope).toBe('storage.type.format.corex');
+    expect(findToken(tokens, '=', 3).leafScope).toBe('keyword.operator.debug-eq.corex');
     expect(findToken(tokens, 'addr').leafScope).toBe('variable.other.readwrite.corex');
     expect(findToken(tokens, ':?').leafScope).toBe('storage.type.format.corex');
     expect(findToken(tokens, ':#010x').leafScope).toBe('storage.type.format.corex');
@@ -1014,8 +1148,29 @@ describe('Strings, recursive {expr=:#06x} interpolation, numbers, and closure vs
     expect(findToken(tokens, ':─^10').leafScope).toBe('storage.type.format.corex');
     expect(findToken(tokens, 'self').leafScope).toBe('variable.language.self.corex');
     expect(findToken(tokens, 'true').leafScope).toBe('constant.language.boolean.corex');
-    expect(findToken(tokens, 'r').leafScope).toBe('punctuation.definition.string.begin.corex');
+    expect(findToken(tokens, 'f', 0).leafScope).toBe('storage.type.string.corex');
+    expect(findToken(tokens, 'r', 0).leafScope).toBe('punctuation.definition.string.begin.corex');
     expect(findToken(tokens, 'br', 0).leafScope).toBe('punctuation.definition.string.begin.corex');
+
+    const retiredTripleQuotes = tokenizeNonWhitespace(
+      getCorexGrammar(),
+      'let t1 = """old"""; let t2 = f"""old"""; let t3 = r#"""old"""#; let t4 = b"""old"""; let t5 = br#"""old"""#;'
+    );
+    expect(findToken(retiredTripleQuotes, '"""', 0).leafScope).toBe(
+      'invalid.illegal.retired-triple-quote.corex'
+    );
+    expect(findToken(retiredTripleQuotes, 'f"""').leafScope).toBe(
+      'invalid.illegal.retired-triple-quote.corex'
+    );
+    expect(findToken(retiredTripleQuotes, 'r#"""').leafScope).toBe(
+      'invalid.illegal.retired-triple-quote.corex'
+    );
+    expect(findToken(retiredTripleQuotes, 'b"""').leafScope).toBe(
+      'invalid.illegal.retired-triple-quote.corex'
+    );
+    expect(findToken(retiredTripleQuotes, 'br#"""').leafScope).toBe(
+      'invalid.illegal.retired-triple-quote.corex'
+    );
   });
 
   it(
@@ -1046,9 +1201,12 @@ describe('Strings, recursive {expr=:#06x} interpolation, numbers, and closure vs
 
       const badTokens = tokenizeNonWhitespace(
         getCorexGrammar(),
-        String.raw`let bad_str = "illegal \{ \q"; let bad_byte = b"\u{0041}";`
+        String.raw`let bad_str = "illegal \{ \q"; let bad_fmt = f"illegal \}"; let bad_byte = b"\u{0041}";`
       );
       expect(findToken(badTokens, String.raw`\{`).leafScope).toBe(
+        'invalid.illegal.escape.brace.corex'
+      );
+      expect(findToken(badTokens, String.raw`\}`).leafScope).toBe(
         'invalid.illegal.escape.brace.corex'
       );
       expect(findToken(badTokens, String.raw`\q`).leafScope).toBe('invalid.illegal.escape.corex');
@@ -1058,6 +1216,49 @@ describe('Strings, recursive {expr=:#06x} interpolation, numbers, and closure vs
     }
   );
 
+  it('terminates opening quotes followed by trailing spaces at EOL without entering multiline string mode', async () => {
+    const trailingSpacesSnippet = [
+      'let s_spaces = "   ',
+      'let after_plain = 1;',
+      'let f_spaces = f"   ',
+      'let after_fmt = 2;',
+      'let fg_spaces = f#"   ',
+      'let after_fmt_guarded = 3;',
+      'let b_spaces = b"   ',
+      'let after_byte = 4;',
+      'let r_spaces = r#"   ',
+      'let after_raw = 5;',
+      'let br_spaces = br#"   ',
+      'let after_byte_raw = 6;',
+    ].join('\n');
+
+    const tokens = tokenizeNonWhitespace(getCorexGrammar(), trailingSpacesSnippet);
+    assertStrictCorexScopeInvariants('trailing-spaces-after-opening-quote', tokens);
+
+    for (const recoveredVar of [
+      'after_plain',
+      'after_fmt',
+      'after_fmt_guarded',
+      'after_byte',
+      'after_raw',
+      'after_byte_raw',
+    ]) {
+      const varToken = findToken(tokens, recoveredVar);
+      expect(varToken.leafScope).toBe('variable.other.readwrite.corex');
+      expect(hasScopeMatching(varToken, 'string')).toBe(false);
+    }
+
+    const multilineEnterRule = (
+      JSON.parse(await readFile(LANGUAGE_CONFIG_PATH, 'utf8')) as LanguageConfigurationSchema
+    ).onEnterRules?.at(-1);
+    expect(multilineEnterRule).toBeDefined();
+    const enterBeforeRx = new RegExp(multilineEnterRule?.beforeText ?? '');
+    expect(enterBeforeRx.test('    let ok_plain = "')).toBe(true);
+    expect(enterBeforeRx.test('    let ok_fmt = f#"')).toBe(true);
+    expect(enterBeforeRx.test('    let bad_plain = "   ')).toBe(false);
+    expect(enterBeforeRx.test('    let bad_fmt = f#"   ')).toBe(false);
+  });
+
   it('tokenizes _-separated SE-13 numeric suffixes and disambiguates |x| closures from a | b | c bitwise OR', () => {
     const numbersAndClosures = [
       'let hex_byte = 0xFF_u8;',
@@ -1066,6 +1267,7 @@ describe('Strings, recursive {expr=:#06x} interpolation, numbers, and closure vs
       'let dec_size = 1_000_usize;',
       'let flt_val = 3.1415_f32 + 1.5e-4_f64;',
       'let mapper = |x: i32, own payload| x + 1;',
+      'let branched = if fast => |lhs| lhs * 2 else |rhs| rhs + 1;',
       'let thunk = || 0_i32;',
       'let bit_mask = flag_a | flag_b | flag_c;',
     ].join('\n');
@@ -1086,15 +1288,16 @@ describe('Strings, recursive {expr=:#06x} interpolation, numbers, and closure vs
     expect(findToken(tokens, 'x', 0).leafScope).toBe('variable.parameter.corex');
     expect(findToken(tokens, 'payload').leafScope).toBe('variable.parameter.corex');
     expect(findToken(tokens, '|', 1).leafScope).toBe('punctuation.definition.parameters.end.corex');
+    expect(findToken(tokens, 'lhs', 0).leafScope).toBe('variable.parameter.corex');
+    expect(findToken(tokens, 'rhs', 0).leafScope).toBe('variable.parameter.corex');
     expect(findToken(tokens, '||').leafScope).toBe('punctuation.definition.parameters.empty.corex');
 
-    expect(findToken(tokens, '|', 2).leafScope).toBe('keyword.operator.bitwise.corex');
+    expect(findToken(tokens, '|', 6).leafScope).toBe('keyword.operator.bitwise.corex');
     expect(findToken(tokens, 'flag_b').leafScope).toBe('variable.other.readwrite.corex');
-    expect(findToken(tokens, '|', 3).leafScope).toBe('keyword.operator.bitwise.corex');
+    expect(findToken(tokens, '|', 7).leafScope).toBe('keyword.operator.bitwise.corex');
 
-    const badSuffixTokens = tokenizeNonWhitespace(getCorexGrammar(), 'let bad_unit = 100_ms;');
     let hasInvalidDigit = false;
-    for (const tok of badSuffixTokens) {
+    for (const tok of tokenizeNonWhitespace(getCorexGrammar(), 'let bad_unit = 100_ms;')) {
       if (tok.leafScope === 'invalid.illegal.character.corex') {
         hasInvalidDigit = true;
         break;
@@ -1114,10 +1317,15 @@ describe('Non-backtracking ReDoS latency (< 50 ms on 4000-char adversarial lines
       `let bitwise = alpha | ${'beta_identifier_name + '.repeat(180)}omega | gamma;`,
       `let generics = invoke_fn[${'LongTypeIdentifierName, '.repeat(170)}unclosed`,
       `if (walrus_candidate: ${'LongTypeSegment '.repeat(255)}unclosed`,
-      `let interp = "prefix {${'long_variable_identifier + '.repeat(150)}tail=:#06x}";`,
-      `/// ${'documentation_token_segment '.repeat(150)}`,
-      `/// **unclosed_bold ${'*word '.repeat(700)}`,
-      `/// \`unclosed_code ${'segment_'.repeat(520)}`,
+      `let interp = f"prefix {${'long_variable_identifier + '.repeat(150)}tail=:#06x}";`,
+      `let plain_unclosed = "prefix {${'a'.repeat(4005)}";`,
+      `let s = f${'#'.repeat(4000)}not_quote`,
+      `let q_double = f"{${'"'.repeat(4000)}`,
+      `let q_single = f"{${"'".repeat(4000)}`,
+      `/| ${'documentation_token_segment '.repeat(150)}`,
+      `/# **unclosed_bold ${'*word '.repeat(700)}`,
+      `/| \`unclosed_code ${'segment_'.repeat(520)}`,
+      `/* ${'*'.repeat(4005)}`,
       `x.foo[A${'a'.repeat(4005)}`,
       `let cls = |A${'a'.repeat(4005)}_| x;`,
       `let qual = A${'a'.repeat(2005)}.B${'b'.repeat(2005)}_;`,
@@ -1176,7 +1384,8 @@ describe('Non-backtracking ReDoS latency (< 50 ms on 4000-char adversarial lines
     const adversarialInputs = [
       `${' '.repeat(2000)}{${'a / b '.repeat(350)}`,
       `/* ${'*'.repeat(4000)}`,
-      `/// ${'x'.repeat(4000)}`,
+      `/# ${'x'.repeat(4000)}`,
+      `/| ${'x'.repeat(4000)}`,
       `${'fn_call('.repeat(500)}`,
     ];
 
