@@ -66,6 +66,10 @@ export const TEXT_DOC_PREFIX = 'textDocument/';
 /** Default negotiated UTF-16 position encoding literal. */
 const UTF16_ENCODING = 'utf-16';
 
+/** Negotiated UTF-8 position encoding literal. */
+// oxlint-disable-next-line unicorn/text-encoding-identifier-case -- LSP 3.17 wire encoding literal
+const UTF8_ENCODING = 'utf-8';
+
 /** Local alias binding `fs.promises`. */
 const fsAsync = fsPromises;
 
@@ -732,10 +736,8 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
       getState: (): LspClientState => CLIENT_STATES[phase] as LspClientState,
       initializeResult: rawInit as unknown as LspInitializeResult,
       isRunning: (): boolean => phase === 1 && !isExited,
-      // oxlint-disable-next-line unicorn/text-encoding-identifier-case -- LSP 3.17 wire encoding literal
       negotiatedEncoding:
-        // oxlint-disable-next-line unicorn/text-encoding-identifier-case -- LSP 3.17 wire encoding literal
-        rawInit.capabilities.positionEncoding === 'utf-8' ? 'utf-8' : UTF16_ENCODING,
+        rawInit.capabilities.positionEncoding === UTF8_ENCODING ? UTF8_ENCODING : UTF16_ENCODING,
       notify: sendNotify,
       pid: child.pid,
       request: sendReq,

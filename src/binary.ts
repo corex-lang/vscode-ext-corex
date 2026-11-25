@@ -39,6 +39,9 @@ const IS_HOST_WIN = process.platform === 'win32';
 /** Maximum parent directory hops walked upward during workspace and toolchain discovery. */
 export const MAX_ANCESTOR_HOPS = 32;
 
+/** Shared `'not-found'` reason suffix. */
+const NOT_FOUND_REASON = 'not-found';
+
 /** Ordered build subdirectories probed relative to `<root>/build` (`../zig-out/bin` escapes `build/`). */
 const BUILD_SUBDIRS = 'stage0,../zig-out/bin,,stage3,stage2,stage1'.split(',');
 
@@ -112,8 +115,8 @@ function createMissingResult(configuredCandidate?: string): BinaryResolutionMiss
   return {
     binaryPath: null,
     ...(configuredCandidate === undefined
-      ? { reason: 'not-found' }
-      : { configuredCandidate, reason: 'configured-path-not-found' }),
+      ? { reason: NOT_FOUND_REASON }
+      : { configuredCandidate, reason: `configured-path-${NOT_FOUND_REASON}` }),
     isFound: false,
   } as BinaryResolutionMissing;
 }
@@ -266,30 +269,27 @@ export function resolveCorexBinary(
   /** Resolves a non-empty `corex.executablePath` setting value. */
   function resolveConfigured(unquoted: string): BinaryResolutionResult {
     const workspaceRoot = workspaceDirs[0] ? resolvePath(workspaceDirs[0]) : '';
-    let expanded = unquoted;
-    if (TILDE_PREFIX_RX.test(expanded)) {
-      if (!homeDir) {
-        return createMissingResult(unquoted);
-      }
-      expanded = pathJoin(homeDir, expanded.slice(2));
+    const hasTilde = TILDE_PREFIX_RX.test(unquoted);
+    if ((hasTilde && !homeDir) || (unquoted.includes(WORKSPACE_FOLDER_TOKEN) && !workspaceRoot)) {
+      return createMissingResult(unquoted);
     }
-    if (expanded.includes(WORKSPACE_FOLDER_TOKEN)) {
-      if (!workspaceRoot) {
-        return createMissingResult(unquoted);
-      }
-      expanded = expanded.replaceAll(WORKSPACE_FOLDER_TOKEN, workspaceRoot);
-    }
+    const expanded = (hasTilde ? pathJoin(homeDir, unquoted.slice(2)) : unquoted).replaceAll(
+      WORKSPACE_FOLDER_TOKEN,
+      workspaceRoot
+    );
     if (!PATH_SEP_RX.test(expanded)) {
       const fromPath = searchPath(expanded);
       return fromPath ? createFoundResult(fromPath) : createMissingResult(expanded);
     }
-    if (!workspaceRoot && !ABS_PATH_PREFIX_RX.test(expanded)) {
-      return createMissingResult(expanded);
-    }
-    const candidate = resolvePath(workspaceRoot, expanded);
+    const candidate =
+      workspaceRoot || ABS_PATH_PREFIX_RX.test(expanded)
+        ? resolvePath(workspaceRoot, expanded)
+        : '';
     const fullPath =
-      isWindows && !WIN_NATIVE_EXT_RX.test(candidate) ? `${candidate}.exe` : candidate;
-    return isExecFile(fullPath) ? createFoundResult(fullPath) : createMissingResult(candidate);
+      candidate && isWindows && !WIN_NATIVE_EXT_RX.test(candidate) ? `${candidate}.exe` : candidate;
+    return fullPath && isExecFile(fullPath)
+      ? createFoundResult(fullPath)
+      : createMissingResult(candidate || expanded);
   }
 
   const unquoted = stripOuterQuotes(configuredPath);

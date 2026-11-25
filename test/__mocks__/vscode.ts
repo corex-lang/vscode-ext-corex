@@ -142,6 +142,8 @@ export interface MockDiagnostic {
 export interface MockMarkdownString {
   /** Whether command links are trusted inside this Markdown block. */
   isTrusted?: boolean;
+  /** Whether safe inline HTML (`<sub>`, `<span>`, `<br>`) is enabled inside this Markdown block. */
+  supportHtml?: boolean;
   /** Raw Markdown source string. */
   value: string;
 }
@@ -344,6 +346,8 @@ export interface MockOutputChannel {
   isShown: boolean;
   /** Last `preserveFocus` boolean passed to `show()`. */
   isLastPreserveFocus?: boolean;
+  /** Optional syntax highlighting language ID passed to `createOutputChannel` (e.g., `'log'`). */
+  readonly languageId?: string;
   /** Recorded lines written via `appendLine` / `append`. */
   readonly lines: string[];
   /** Output channel display title (`'CoreX'`). */
@@ -765,6 +769,9 @@ export const CodeActionKind = {
   Source: 'source',
 } as const;
 
+/** VS Code `ColorThemeKind` numeric enum constants (`1 = Light`, `2 = Dark`, `3 = HighContrast`, `4 = HighContrastLight`). */
+export const ColorThemeKind = { Dark: 2, HighContrast: 3, HighContrastLight: 4, Light: 1 } as const;
+
 // ----------------------------------- REGEX PATTERNS ------------------------------------
 
 /** Matches URI scheme prefixes (`file:`, `untitled:`, etc.) without backtracking. */
@@ -824,6 +831,9 @@ const visibleEditorsState: MockTextEditor[] = [];
 
 /** Currently focused `MockTextEditor` backing `window.activeTextEditor`. */
 let activeEditorState: MockTextEditor | undefined = undefined;
+
+/** Current `ColorThemeKind` (`2 = Dark` by default) backing `window.activeColorTheme`. */
+let activeColorThemeKindState: 1 | 2 | 3 | 4 = 2;
 
 /** Monotonic counter generating unique `MockTextEditorDecorationType.key` values. */
 let nextDecorationId = 1;
@@ -1530,10 +1540,13 @@ export const workspace = {
 
 /** Mock `vscode.window` namespace. */
 export const window = {
+  get activeColorTheme(): { readonly kind: 1 | 2 | 3 | 4 } {
+    return { kind: activeColorThemeKindState };
+  },
   get activeTextEditor(): MockTextEditor | undefined {
     return activeEditorState;
   },
-  createOutputChannel(channelName: string): MockOutputChannel {
+  createOutputChannel(channelName: string, languageId?: string): MockOutputChannel {
     const lines: string[] = [];
     const channel: MockOutputChannel = {
       append(value: string): void {
@@ -1553,6 +1566,7 @@ export const window = {
       },
       isDisposed: false,
       isShown: false,
+      languageId,
       lines,
       name: channelName,
       show(isPreservingFocus?: boolean): void {
@@ -1781,6 +1795,7 @@ export function resetVscodeMock(): void {
   decorationTypesState.length = 0;
   visibleEditorsState.length = 0;
   activeEditorState = undefined;
+  activeColorThemeKindState = 2;
   nextDecorationId = 1;
   nextDialogChoiceState = undefined;
   for (const key of Object.keys(providerRegistryState) as (keyof MockProviderRegistry)[]) {
@@ -2029,6 +2044,15 @@ export function setMockEditorVisibleRanges(
 ): void {
   editor.visibleRanges = [...visibleRanges];
   visibleRangesEmitter.fire({ textEditor: editor, visibleRanges: editor.visibleRanges });
+}
+
+/**
+ * Sets `window.activeColorTheme.kind` (`1 = Light`, `2 = Dark`, `3 = HighContrast`, `4 = HighContrastLight`).
+ *
+ * @param kind   Target VS Code `ColorThemeKind` numeric value.
+ */
+export function setActiveColorThemeKind(kind: 1 | 2 | 3 | 4): void {
+  activeColorThemeKindState = kind;
 }
 
 /** Returns live references to recorded UI surfaces, providers, commands, and watchers. */

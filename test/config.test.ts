@@ -191,6 +191,7 @@ describe('Lazy OutputChannel logger (src/utils/logger.ts)', () => {
     const channel = getOutputChannel();
     expect(getMockState().outputChannels).toHaveLength(1);
     expect(channel.name).toBe('CoreX');
+    expect(getMockState().outputChannels[0]?.languageId).toBe('log');
     expect(getOutputChannel()).toBe(channel);
 
     showOutputChannel(true);

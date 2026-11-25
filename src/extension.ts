@@ -85,10 +85,10 @@ import {
 import {
   COREX_CONFIG_SECTION,
   EXEC_PATH_KEY,
-  hasServerRestartConfigChange,
+  getCorexWorkspaceConfig,
   INLAY_HINTS_KEY,
   invalidateConfigCache,
-  readExtensionConfig,
+  readCfgTuple,
 } from '@/config';
 import type {
   LspClientSession,
@@ -160,8 +160,9 @@ const LSP_SERVICE_LABEL = `${LANG_SERVER_TEXT} (\`corex lsp\`)`;
 /** Shared display label for the Formatter service. */
 const FMT_SERVICE_LABEL = 'Formatter (`corex fmt`)';
 
-/** Shared UI words & `corex.*` command suffixes. */
+/** Shared UI words, `'file'` URI scheme, & `corex.*` command suffixes. */
 const [
+  FILE_SCHEME,
   DOC_WORD,
   DISABLED_TEXT,
   SHOW_OUTPUT_LABEL,
@@ -174,15 +175,28 @@ const [
   SUB_STATUS,
   SUB_HINTS,
 ] = splitCsv(
-  'Document,Disabled,Show Output,Restart,Settings,Inlay Hints,' +
+  'file,Document,Disabled,Show Output,Restart,Settings,Inlay Hints,' +
     'showOutputChannel,restartServer,stopServer,showStatusMenu,toggleInlayHints'
-) as [string, string, string, string, string, string, string, string, string, string, string];
+) as [
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+  string,
+];
 
 /** Local alias binding `CodeActionKind.QuickFix`. */
 const QUICK_FIX_KIND = CodeActionKind.QuickFix;
 
 /** Document selector matching local `file:` CoreX documents (`untitled:` excluded). */
-const COREX_SELECTOR: DocumentSelector = { language: COREX_CONFIG_SECTION, scheme: 'file' };
+const COREX_SELECTOR: DocumentSelector = { language: COREX_CONFIG_SECTION, scheme: FILE_SCHEME };
 
 /** Built-in VS Code command opening Settings filtered by query. */
 const CMD_OPEN_SETTINGS = 'workbench.action.openSettings';
@@ -210,15 +224,11 @@ const CLOSED_QUOTED_RX = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/;
 
 /** Matches comments, multiline string openers, single-line strings/chars, and `_unused` / word tokens. */
 const LINE_TOKEN_RX = new RegExp(
-  `${
-    // oxlint-disable-next-line prefer-named-capture-group -- positional groups avoid unmangleable group keys under 25 KB bundle budget
-    /\/(?:[/|#].*|\*.*?(?:\*\/|$))|(?:\b(?:(?:f|b?r)(#*)|b)|(?<![\w"#]))(")$|\b(f(?=#)|b?r)(#*)"|/
-      .source
-  }${
-    // oxlint-disable-next-line prefer-named-capture-group -- positional groups avoid unmangleable group keys under 25 KB bundle budget
-    /\bf"(?:\\.|[^"\\{]|\{\{|\{(?!\{)(?:@|\{(?:@|[^"{}'])*\}|[^"{}'])*\})*"?|(?:\bb)?(?:@|["'].*)|(_\w+)|\w+/
-      .source
-  }`.replaceAll('@', CLOSED_QUOTED_RX.source),
+  // oxlint-disable-next-line prefer-named-capture-group -- positional groups avoid unmangleable group keys under 25 KB bundle budget
+  /\/(?:[/|#].*|\*.*?(?:\*\/|$))|(?:\b(?:(?:f|b?r)(#*)|b)|(?<![\w"#]))(")$|\b(f(?=#)|b?r)(#*)"|\bf"(?:\\.|[^"\\{]|\{\{|\{(?!\{)(?:@|\{(?:@|[^"{}'])*\}|[^"{}'])*\})*"?|(?:\bb)?(?:@|["'].*)|(_\w+)|\w+/.source.replaceAll(
+    '@',
+    CLOSED_QUOTED_RX.source
+  ),
   'g'
 );
 
@@ -338,9 +348,14 @@ function disposeList(subs: Disposable[]): void {
   subs.length = 0;
 }
 
+/** Returns `true` when the active VS Code workspace is trusted. */
+function isWsTrusted(): boolean {
+  return vsWorkspace.isTrusted;
+}
+
 /** Returns `true` when the workspace is trusted and `corex.enable` is `true`. */
 function isCorexActive(): boolean {
-  return vsWorkspace.isTrusted && readExtensionConfig().isEnabled;
+  return isWsTrusted() && readCfgTuple()[0];
 }
 
 /** Returns `activeClient` when its `didOpen` sweep completed and the process is running. */
@@ -356,7 +371,7 @@ function getRunningClient(): LspClientSession | undefined {
 function isCorexFileDoc(document: TextDocument): boolean {
   return (
     document.languageId === COREX_CONFIG_SECTION &&
-    document.uri.scheme === 'file' &&
+    document.uri.scheme === FILE_SCHEME &&
     isValidUri(readDocUri(document))
   );
 }
@@ -395,7 +410,7 @@ function collectWorkspaces(): readonly [string[], LspWorkspaceFolder[]] {
   const dirs: string[] = [];
   const lspFolders: LspWorkspaceFolder[] = [];
   for (const folder of vsWorkspace.workspaceFolders ?? []) {
-    if (folder.uri.scheme === 'file') {
+    if (folder.uri.scheme === FILE_SCHEME) {
       dirs.push(folder.uri.fsPath);
       lspFolders.push({ name: folder.name, uri: readDocUri(folder) });
     }
@@ -455,10 +470,10 @@ function buildListMapper<T, R>(
 function describeServices(
   summary = 'Inactive'
 ): readonly [LspClientSession | undefined, string, string, string, 'Stop' | 'Start'] {
-  const cfg = readExtensionConfig();
+  const cfg = readCfgTuple();
   const client = getRunningClient();
-  let lspStatus = cfg.isLspEnabled ? summary : DISABLED_TEXT;
-  if (!vsWorkspace.isTrusted) {
+  let lspStatus = cfg[1] ? summary : DISABLED_TEXT;
+  if (!isWsTrusted()) {
     lspStatus = 'Untrusted';
   } else if (client) {
     lspStatus = `PID ${client.pid}`;
@@ -468,8 +483,8 @@ function describeServices(
   return [
     client,
     lspStatus,
-    isCorexActive() && cfg.isFormatEnabled ? `Ready (${client ? 'LSP' : 'CLI'})` : DISABLED_TEXT,
-    cfg.isInlayHintsEnabled ? 'On' : 'Off',
+    isCorexActive() && cfg[2] ? `Ready (${client ? 'LSP' : 'CLI'})` : DISABLED_TEXT,
+    cfg[3] ? 'On' : 'Off',
     client ? 'Stop' : 'Start',
   ];
 }
@@ -486,8 +501,9 @@ function setStatus(icon: StatusIcon, summary: string): void {
   }
   lastStatusState = [icon, summary];
   const [client, lspStatus, fmtStatus, hintsStatus, toggleLabel] = describeServices(summary);
-  const tooltip = new VsMarkdown(
-    `**CoreX** – ${summary}
+  const tooltip = assignProps(
+    new VsMarkdown(
+      `**CoreX** – ${summary}
 
 $(${client ? 'check' : icon}) **${LSP_SERVICE_LABEL}:** ${lspStatus}
 
@@ -502,9 +518,10 @@ ${mapList(
   ] as const,
   ([label, subCmd]) => `[${label}](command:${formatCorexId(subCmd)}) · `
 ).join('')}[${SETTINGS_LABEL}](command:${CMD_OPEN_SETTINGS}?%22${COREX_CONFIG_SECTION}%22)`,
-    true
+      true
+    ),
+    { isTrusted: true }
   );
-  tooltip.isTrusted = true;
   assignProps((statusBarItem ??= vsWindow.createStatusBarItem(2 as StatusBarAlignment, 100)), {
     backgroundColor:
       icon === 'error' || icon === 'warning'
@@ -714,13 +731,27 @@ function toVsDocSymbol(rawSym: LspDocumentSymbol): DocumentSymbol {
 }
 
 /**
- * Narrows `string | LspMarkupContent` into `string | MarkdownString | undefined`.
+ * Narrows `string | LspMarkupContent` into `string | MarkdownString | undefined`, styling contract footers.
  *
  * @param docVal   Untrusted documentation block.
  */
 function toVsDoc(docVal: unknown): string | MarkdownString | undefined {
   if (isRecord(docVal) && isStr(docVal.value)) {
-    return docVal.kind === 'markdown' ? new VsMarkdown(docVal.value) : docVal.value;
+    const rawMd = docVal.value;
+    if (docVal.kind !== 'markdown') {
+      return rawMd;
+    }
+    const splitAt = rawMd.lastIndexOf('\n\n---\n\n') + 7;
+    const tail = splitAt > 6 ? rawMd.slice(splitAt) : '';
+    let outMd = rawMd;
+    if (tail[0] === '✓' || tail[0] === '⚠') {
+      const themeKind = vsWindow.activeColorTheme?.kind ?? 2;
+      const body = tail.replaceAll('\n\n', '<br>');
+      const hex = themeKind === 1 ? '00000099' : 'ffffffa6';
+      const inner = themeKind > 2 ? body : `<span style="color:#${hex};">${body}</span>`;
+      outMd = `${rawMd.slice(0, splitAt)}<sub>${inner}</sub>`;
+    }
+    return assignProps(new VsMarkdown(outMd), { supportHtml: true });
   }
   return readOptStr(docVal);
 }
@@ -802,8 +833,7 @@ async function requestLsp<R>(
   mapFn: (rawValue: unknown) => R | null,
   errMode: QueryErrorMode = 0
 ): Promise<R | null> {
-  const client =
-    isCorexActive() && readExtensionConfig().isLspEnabled ? await sessionPromise : undefined;
+  const client = isCorexActive() && readCfgTuple()[1] ? await sessionPromise : undefined;
   if (client === activeClient && client?.isRunning()) {
     try {
       return mapFn(await client.request(method, params, token));
@@ -973,8 +1003,8 @@ function registerPosProvider<R>(
 /** Synchronizes `DocumentFormattingEditProvider` and `DocumentRangeFormattingEditProvider` registrations. */
 function syncFormatProviders(): void {
   disposeList(formatProviderSubs);
-  const cfg = readExtensionConfig();
-  if (!isCorexActive() || !cfg.isFormatEnabled) {
+  const cfg = readCfgTuple();
+  if (!isCorexActive() || !cfg[2]) {
     return;
   }
 
@@ -985,15 +1015,15 @@ function syncFormatProviders(): void {
         if (!isCorexActive() || !isCorexFileDoc(document)) {
           return null;
         }
-        const latestCfg = readExtensionConfig();
-        if (latestCfg.isLspEnabled) {
+        const latestCfg = readCfgTuple();
+        if (latestCfg[1]) {
           const edits = await queryDoc(document, 'formatting', { options }, token, mapEditList);
           if (edits || isCanceled(token) || getRunningClient()) {
             return edits && appendLfEdit(document, edits);
           }
         }
         const [workspaceDirs] = collectWorkspaces();
-        const binaryRes = resolveCorexBinary(latestCfg.executablePath, { workspaceDirs });
+        const binaryRes = resolveCorexBinary(latestCfg[4], { workspaceDirs });
         if (!binaryRes.isFound) {
           logWarn(BINARY_NOT_FOUND_MSG);
           return null;
@@ -1002,7 +1032,7 @@ function syncFormatProviders(): void {
         const formattedText = await runCorexFmtCli(
           binaryRes.binaryPath,
           originalText,
-          isInternalCoreEnabled(latestCfg.internalCore, workspaceDirs, [document.uri.fsPath]),
+          isInternalCoreEnabled(latestCfg[5], workspaceDirs, [document.uri.fsPath]),
           token
         );
         return formattedText === null
@@ -1015,7 +1045,7 @@ function syncFormatProviders(): void {
             );
       }
     ),
-    ...(cfg.isLspEnabled
+    ...(cfg[1]
       ? [
           registerLangProvider(
             '#RangeFormattingEdit*',
@@ -1120,21 +1150,21 @@ function reconcileSession(mode?: 1 | 2): Promise<LspClientSession | undefined> {
     const prevClient = activeClient;
     clearSessionTracking();
     await prevClient?.stop();
-    const cfg = readExtensionConfig();
+    const cfg = readCfgTuple();
     if (isDeactivated || gen !== sessionGen) {
       return undefined;
     }
     syncFormatProviders();
-    if (!isCorexActive() || !cfg.isLspEnabled || isManuallyStopped) {
+    if (!isCorexActive() || !cfg[1] || isManuallyStopped) {
       disposeList(lspProviderSubs);
-      if (!vsWorkspace.isTrusted) {
+      if (!isWsTrusted()) {
         setStatus('warning', 'Untrusted.');
-      } else if (!cfg.isEnabled) {
+      } else if (!cfg[0]) {
         statusBarItem?.hide();
       } else if (isManuallyStopped) {
         setStatus('circle-slash', 'Stopped.');
       } else {
-        setStatus('warning', cfg.isFormatEnabled ? 'CLI fmt.' : 'Off.');
+        setStatus('warning', cfg[2] ? 'CLI fmt.' : 'Off.');
       }
       return undefined;
     }
@@ -1275,7 +1305,7 @@ function reconcileSession(mode?: 1 | 2): Promise<LspClientSession | undefined> {
                         }
                       );
                     }),
-                    Boolean((rawValue as { isIncomplete?: unknown })?.isIncomplete)
+                    Boolean((rawValue as { isIncomplete?: unknown }).isIncomplete)
                   )
                 : null;
             },
@@ -1316,7 +1346,7 @@ function reconcileSession(mode?: 1 | 2): Promise<LspClientSession | undefined> {
           registerLangProvider('InlayHints', {
             onDidChangeInlayHints: inlayHintsEmitter.event,
             provideInlayHints: (document: TextDocument, range: Range, token: CancellationToken) =>
-              readExtensionConfig().isInlayHintsEnabled
+              readCfgTuple()[3]
                 ? queryDoc(
                     document,
                     'inlayHint',
@@ -1393,13 +1423,13 @@ function reconcileSession(mode?: 1 | 2): Promise<LspClientSession | undefined> {
       }
 
       const [workspaceDirs, workspaceFolders] = collectWorkspaces();
-      const binaryRes = resolveCorexBinary(cfg.executablePath, { workspaceDirs });
+      const binaryRes = resolveCorexBinary(cfg[4], { workspaceDirs });
       if (!binaryRes.isFound) {
         if (binaryRes.reason === 'not-found') {
           setStatus('warning', BINARY_NOT_FOUND_MSG);
           logWarn(BINARY_NOT_FOUND_MSG);
         } else {
-          const candidate = binaryRes.configuredCandidate ?? cfg.executablePath;
+          const candidate = binaryRes.configuredCandidate ?? cfg[4];
           const msg = `Missing: ${candidate}`;
           reportErrorStatus(msg);
           if (lastMissingKey !== candidate) {
@@ -1414,7 +1444,7 @@ function reconcileSession(mode?: 1 | 2): Promise<LspClientSession | undefined> {
       const openCxPaths: string[] = [];
       forEachOpenCxDoc((doc) => openCxPaths.push(doc.uri.fsPath));
       const { binaryPath } = binaryRes;
-      const isInternalCore = isInternalCoreEnabled(cfg.internalCore, workspaceDirs, openCxPaths);
+      const isInternalCore = isInternalCoreEnabled(cfg[5], workspaceDirs, openCxPaths);
       setStatus('sync~spin', 'Starting…');
       logInfo(`Start ${binaryPath}`);
 
@@ -1466,7 +1496,7 @@ function reconcileSession(mode?: 1 | 2): Promise<LspClientSession | undefined> {
           },
           onStderr: (line) => logInfo(`[lsp] ${line}`),
           onTrace: logTrace,
-          traceMode: cfg.traceServer,
+          traceMode: cfg[6],
           workspaceFolders,
         });
 
@@ -1503,7 +1533,7 @@ function triggerFreshReconcile(): void {
 
 /** Starts or restarts `corex lsp` on user command, warning if the workspace is untrusted. */
 function restartFromCommand(): Promise<LspClientSession | undefined> | undefined {
-  if (!vsWorkspace.isTrusted) {
+  if (!isWsTrusted()) {
     runDetached(vsWindow.showWarningMessage('Grant Workspace Trust to run CoreX.'));
     return undefined;
   }
@@ -1512,14 +1542,12 @@ function restartFromCommand(): Promise<LspClientSession | undefined> | undefined
 
 /** Stops any running `corex lsp` server until restarted by the user or configuration change. */
 function stopServerManually(): Promise<LspClientSession | undefined> | undefined {
-  return vsWorkspace.isTrusted ? reconcileSession(2) : undefined;
+  return isWsTrusted() ? reconcileSession(2) : undefined;
 }
 
 /** Toggles `corex.inlayHints.enable` in user configuration. */
 function toggleInlayHintsCommand(): Thenable<void> {
-  return vsWorkspace
-    .getConfiguration(COREX_CONFIG_SECTION)
-    .update(INLAY_HINTS_KEY, !readExtensionConfig().isInlayHintsEnabled, true);
+  return getCorexWorkspaceConfig().update(INLAY_HINTS_KEY, !readCfgTuple()[3], true);
 }
 
 /**
@@ -1678,7 +1706,7 @@ function scheduleDecorations(): void {
     decorationTimer = setTimer(() => {
       decorationTimer = undefined;
       const editors = vsWindow.visibleTextEditors;
-      for (const editor of editors?.[0] ? editors : [vsWindow.activeTextEditor]) {
+      for (const editor of editors[0] ? editors : [vsWindow.activeTextEditor]) {
         if (editor) {
           updateEditorDecorations(editor);
         }
@@ -1798,27 +1826,32 @@ export function activate(context: ExtensionContext): void {
     subscribeDidEvent(
       vsWorkspace,
       '~WorkspaceFolders',
-      () => vsWorkspace.isTrusted && triggerFreshReconcile()
+      () => isWsTrusted() && triggerFreshReconcile()
     ),
     subscribeDidEvent<{ readonly affectsConfiguration: (section: string) => boolean }>(
       vsWorkspace,
       '~Configuration',
       (configEvent) => {
         if (configEvent.affectsConfiguration(COREX_CONFIG_SECTION)) {
-          const prevConfig = readExtensionConfig();
+          const prev = readCfgTuple();
           invalidateConfigCache();
-          const nextConfig = readExtensionConfig();
-          if (hasServerRestartConfigChange(prevConfig, nextConfig)) {
+          const next = readCfgTuple();
+          if (
+            prev[0] !== next[0] ||
+            prev[1] !== next[1] ||
+            prev[4] !== next[4] ||
+            prev[5] !== next[5]
+          ) {
             triggerFreshReconcile();
           } else {
-            if (prevConfig.traceServer !== nextConfig.traceServer) {
-              activeClient?.setTraceMode(nextConfig.traceServer);
+            if (prev[6] !== next[6]) {
+              activeClient?.setTraceMode(next[6]);
             }
             syncFormatProviders();
-            if (prevConfig.isInlayHintsEnabled !== nextConfig.isInlayHintsEnabled) {
+            if (prev[3] !== next[3]) {
               inlayHintsEmitter?.fire();
             }
-            if (lastStatusState && nextConfig.isEnabled) {
+            if (lastStatusState && next[0]) {
               setStatus(...lastStatusState);
             }
           }
@@ -1832,7 +1865,7 @@ export function activate(context: ExtensionContext): void {
         if (
           isDeactivated ||
           !isCorexActive() ||
-          uri.scheme !== 'file' ||
+          uri.scheme !== FILE_SCHEME ||
           !isValidUri(canonicalUri) ||
           IGNORED_PATH_RX.test(vsWorkspace.asRelativePath(uri, false))
         ) {

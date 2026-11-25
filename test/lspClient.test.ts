@@ -56,6 +56,7 @@ import {
   Position,
   Range,
   resetVscodeMock,
+  setActiveColorThemeKind,
   setMockEditorVisibleRanges,
   setNextDialogChoice,
   setWorkspaceConfig,
@@ -1556,6 +1557,57 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     expect((mockState.outputChannels[0]?.lines ?? []).join('\n')).not.toContain('Timeout:');
     expect((mockState.outputChannels[0]?.lines ?? []).join('\n')).not.toContain('⚠');
   }, 30_000);
+
+  it('styles hover contract footers with theme-adaptive <sub> spans, omits (verified), suppresses operator hover, and uses log output highlighting', async () => {
+    const workspaceDir = await makeTempWorkspace();
+    const mainPath = path.join(workspaceDir, 'src', 'main.cx');
+    await writeFile(mainPath, VALID_MAIN_CX, 'utf8');
+    const mainDoc = openMockDocument({ fsPath: mainPath, text: VALID_MAIN_CX });
+
+    setWorkspaceTrusted(true);
+    setWorkspaceFolders([workspaceDir]);
+    setWorkspaceConfig({ executablePath: getLiveBinaryPath(), 'lsp.enable': true });
+
+    activate(createMockExtensionContext());
+    await waitUntil(
+      () => getMockState().statusBarItems[0]?.text === '$(check) CoreX',
+      'LSP ready for hover contract footer & operator suppression test'
+    );
+
+    expect(getMockState().outputChannels[0]?.languageId).toBe('log');
+
+    const hoverProvider = getMockState().providers.hover[0] as HoverProviderHandle;
+    const { token } = createMockCancelToken();
+    const fnPos = findAnchoredPosition(VALID_MAIN_CX, 'pub fn add_pair(', 'add_pair');
+    const opPos = findAnchoredPosition(VALID_MAIN_CX, 'left_val +%', '+%');
+
+    // Operator token `+%` returns `null` hover:
+    expect(await hoverProvider.provideHover(mainDoc, opPos, token)).toBeNull();
+
+    // Dark theme (`kind = 2`) wraps contract footer in `<sub><span style="color:#ffffffa6;">…<br>…</span></sub>` without `(verified)`:
+    setActiveColorThemeKind(2);
+    const darkHover = await hoverProvider.provideHover(mainDoc, fnPos, token);
+    const darkMd = darkHover?.contents as MockMarkdownString | undefined;
+    expect(darkMd?.supportHtml).toBe(true);
+    expect(darkMd?.isTrusted).toBeUndefined();
+    expect(darkMd?.value).not.toContain('(verified)');
+    expect(darkMd?.value).toContain('<sub><span style="color:#ffffffa6;">✓ `@no_alloc`');
+    expect(darkMd?.value).toContain('<br>**stack:**');
+
+    // Light theme (`kind = 1`) uses `#00000099`:
+    setActiveColorThemeKind(1);
+    const lightHover = await hoverProvider.provideHover(mainDoc, fnPos, token);
+    expect((lightHover?.contents as MockMarkdownString | undefined)?.value).toContain(
+      '<sub><span style="color:#00000099;">✓ `@no_alloc`'
+    );
+
+    // High Contrast (`kind = 3`) uses `<sub>…</sub>` with zero color override:
+    setActiveColorThemeKind(3);
+    const hcHover = await hoverProvider.provideHover(mainDoc, fnPos, token);
+    const hcVal = (hcHover?.contents as MockMarkdownString | undefined)?.value ?? '';
+    expect(hcVal).toContain('<sub>✓ `@no_alloc`');
+    expect(hcVal).not.toContain('<span style=');
+  }, 20_000);
 });
 
 // --------- 5. DR-25 Linter, Quick Fixes & Ranged Sync ---------

@@ -24,9 +24,9 @@ export const vsWorkspace = workspace;
 /** Lazily initialized singleton VS Code output channel instance. */
 let outputChannel: OutputChannel | undefined = undefined;
 
-/** Returns the `CoreX` output channel, creating it lazily on first access. */
+/** Returns the `CoreX` `'log'` output channel, creating it lazily on first access. */
 function ensureChannel(): OutputChannel {
-  return (outputChannel ??= vsWindow.createOutputChannel('CoreX'));
+  return (outputChannel ??= vsWindow.createOutputChannel('CoreX', 'log'));
 }
 
 /**

@@ -17,6 +17,19 @@ import type {
 } from '@/types';
 import { vsWorkspace } from '@/utils/logger';
 
+// ---------------------------------------- TYPES ----------------------------------------
+
+/** Compact positional configuration tuple `[enable, lsp, fmt, hints, execPath, internalCore, trace]`. */
+export type ExtensionConfigTuple = readonly [
+  boolean,
+  boolean,
+  boolean,
+  boolean,
+  string,
+  InternalCoreMode,
+  TraceServerMode,
+];
+
 // --------------------------------------- CONSTS ----------------------------------------
 
 /** Configuration namespace prefix in `package.json`. */
@@ -44,10 +57,13 @@ export const DEFAULT_EXTENSION_CONFIG: ExtensionConfig = {
 
 /** Keys whose changes require restarting `corex lsp` (sorted alphabetically). */
 const RESTART_KEYS = splitCsv(
-  'executablePath,internalCore,isEnabled,isLspEnabled'
+  `${EXEC_PATH_KEY},internalCore,isEnabled,isLspEnabled`
 ) as readonly (keyof ExtensionConfig)[];
 
 // -------------------------------------- INTERNALS --------------------------------------
+
+/** Cached positional configuration tuple cleared on `invalidateConfigCache()`. */
+let cachedTuple: ExtensionConfigTuple | undefined = undefined;
 
 /** Cached configuration snapshot cleared on `invalidateConfigCache()`. */
 let cachedConfig: ExtensionConfig | undefined = undefined;
@@ -87,26 +103,49 @@ export function parseExtensionConfig(rawInput: RawExtensionConfigInput): Extensi
   };
 }
 
-/** Clears the cached `ExtensionConfig` snapshot so the next `readExtensionConfig` re-queries VS Code. */
+/** Clears the cached configuration snapshots so the next read re-queries VS Code. */
 export function invalidateConfigCache(): void {
+  cachedTuple = undefined;
   cachedConfig = undefined;
+}
+
+/** Returns the `corex` workspace configuration view from `vscode.workspace`. */
+export function getCorexWorkspaceConfig() {
+  return vsWorkspace.getConfiguration(COREX_CONFIG_SECTION);
+}
+
+/** Reads, validates, and caches all `corex.*` workspace settings as a compact tuple. */
+export function readCfgTuple(): ExtensionConfigTuple {
+  if (!cachedTuple) {
+    const configView = getCorexWorkspaceConfig();
+    const rawExec = configView.get(EXEC_PATH_KEY);
+    const rawMode = configView.get('internalCore');
+    const rawTrace = configView.get('trace.server');
+    cachedTuple = [
+      configView.get(ENABLE_KEY) !== false,
+      configView.get(`lsp.${ENABLE_KEY}`) !== false,
+      configView.get(`format.${ENABLE_KEY}`) !== false,
+      configView.get(INLAY_HINTS_KEY) === true,
+      isStr(rawExec) ? rawExec : '',
+      isInternalCoreMode(rawMode) ? rawMode : 'auto',
+      isTraceServerMode(rawTrace) ? rawTrace : 'off',
+    ];
+  }
+  return cachedTuple;
 }
 
 /** Reads, validates, and caches all `corex.*` workspace configuration settings. */
 export function readExtensionConfig(): ExtensionConfig {
   if (!cachedConfig) {
-    const configView = vsWorkspace.getConfiguration(COREX_CONFIG_SECTION);
-    const rawExec = configView.get(EXEC_PATH_KEY);
-    const rawMode = configView.get('internalCore');
-    const rawTrace = configView.get('trace.server');
+    const tuple = readCfgTuple();
     cachedConfig = {
-      executablePath: isStr(rawExec) ? rawExec : '',
-      internalCore: isInternalCoreMode(rawMode) ? rawMode : 'auto',
-      isEnabled: configView.get(ENABLE_KEY) !== false,
-      isFormatEnabled: configView.get(`format.${ENABLE_KEY}`) !== false,
-      isInlayHintsEnabled: configView.get(INLAY_HINTS_KEY) === true,
-      isLspEnabled: configView.get(`lsp.${ENABLE_KEY}`) !== false,
-      traceServer: isTraceServerMode(rawTrace) ? rawTrace : 'off',
+      executablePath: tuple[4],
+      internalCore: tuple[5],
+      isEnabled: tuple[0],
+      isFormatEnabled: tuple[2],
+      isInlayHintsEnabled: tuple[3],
+      isLspEnabled: tuple[1],
+      traceServer: tuple[6],
     };
   }
   return cachedConfig;
