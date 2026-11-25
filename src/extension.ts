@@ -76,7 +76,6 @@ import {
   isStr,
   isValidUri,
   LSP_REQUEST_CANCELED,
-  LSP_SERVER_CANCELED,
   notifyTextDocument,
   runCorexFmtCli,
   setTimer,
@@ -613,7 +612,7 @@ function toVsEdit(edit: LspTextEdit): TextEdit {
  * @param edits      Converted text edits.
  */
 function appendLfEdit(document: TextDocument, edits: TextEdit[]): TextEdit[] {
-  if (edits.length > 0 && (document.eol as number) === 2) {
+  if (edits[0] && (document.eol as number) === 2) {
     edits.push(VsTextEdit.setEndOfLine(1 as EndOfLine));
   }
   return edits;
@@ -720,13 +719,10 @@ function toVsDocSymbol(rawSym: LspDocumentSymbol): DocumentSymbol {
  * @param docVal   Untrusted documentation block.
  */
 function toVsDoc(docVal: unknown): string | MarkdownString | undefined {
-  if (isStr(docVal)) {
-    return docVal;
-  }
   if (isRecord(docVal) && isStr(docVal.value)) {
     return docVal.kind === 'markdown' ? new VsMarkdown(docVal.value) : docVal.value;
   }
-  return undefined;
+  return readOptStr(docVal);
 }
 
 /**
@@ -812,13 +808,12 @@ async function requestLsp<R>(
     try {
       return mapFn(await client.request(method, params, token));
     } catch (error: unknown) {
-      if (!isCanceled(token)) {
-        const isRpc = isJsonRpcRequestError(error);
-        if (errMode === 1 && isRpc && error.code === LSP_SERVER_CANCELED) {
-          throw new Error('Busy', { cause: error });
-        } else if (errMode === 2 && (!isRpc || error.code !== LSP_REQUEST_CANCELED)) {
-          throw error;
-        }
+      if (
+        !isCanceled(token) &&
+        errMode > 0 &&
+        (!isJsonRpcRequestError(error) || error.code !== LSP_REQUEST_CANCELED)
+      ) {
+        throw errMode === 1 ? new Error('Busy', { cause: error }) : error;
       }
     }
   }
@@ -1683,7 +1678,7 @@ function scheduleDecorations(): void {
     decorationTimer = setTimer(() => {
       decorationTimer = undefined;
       const editors = vsWindow.visibleTextEditors;
-      for (const editor of editors?.length ? editors : [vsWindow.activeTextEditor]) {
+      for (const editor of editors?.[0] ? editors : [vsWindow.activeTextEditor]) {
         if (editor) {
           updateEditorDecorations(editor);
         }

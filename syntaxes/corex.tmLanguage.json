@@ -281,6 +281,70 @@
           "match": "(?://!|///(?![/|#])).*$"
         },
         {
+          "comment": "DR-25 / DR-14 tool directives: // corex check: … and // corex fmt: …",
+          "name": "meta.directive.comment.corex",
+          "begin": "(?<!/)(//)[ \\t]*(corex)[ \\t]+(check|fmt)[ \\t]*(:)",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.comment.corex" },
+            "2": { "name": "keyword.control.directive.corex" },
+            "3": { "name": "keyword.control.directive.corex" },
+            "4": { "name": "punctuation.separator.key-value.corex" }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "begin": "(--)",
+              "beginCaptures": {
+                "1": { "name": "punctuation.separator.comment.corex" }
+              },
+              "contentName": "comment.line.double-slash.rationale.corex",
+              "end": "$",
+              "patterns": [{ "include": "#comment-inline-formatting" }]
+            },
+            {
+              "match": "(?<!/)(//)[ \\t]*(corex)[ \\t]+(check|fmt)[ \\t]*(:)",
+              "captures": {
+                "1": { "name": "punctuation.definition.comment.corex" },
+                "2": { "name": "keyword.control.directive.corex" },
+                "3": { "name": "keyword.control.directive.corex" },
+                "4": { "name": "punctuation.separator.key-value.corex" }
+              }
+            },
+            {
+              "name": "keyword.other.directive.corex",
+              "match": "(?<![A-Za-z0-9_-])(?:file-expect|file-allow|file-off|expect|allow|off|on)(?![A-Za-z0-9_-])"
+            },
+            {
+              "name": "constant.other.lint-code.corex",
+              "match": "(?<![A-Za-z0-9_-])W0[0-9]{3}(?![A-Za-z0-9_-])"
+            },
+            {
+              "name": "support.constant.lint-rule.corex",
+              "match": "\\b[a-z][a-z0-9]*+(?:-[a-z0-9]++)++\\b"
+            },
+            {
+              "name": "punctuation.section.parens.begin.corex",
+              "match": "\\("
+            },
+            {
+              "name": "punctuation.section.parens.end.corex",
+              "match": "\\)"
+            },
+            {
+              "name": "punctuation.separator.comma.corex",
+              "match": ","
+            },
+            {
+              "name": "support.constant.lint-rule.corex",
+              "match": "\\b[a-z][a-z0-9]*\\b"
+            },
+            {
+              "name": "comment.line.double-slash.directive.corex",
+              "match": "[A-Za-z0-9_]+|-(?!-)|[^A-Za-z0-9_ \\t\\r\\n(),\\-]+"
+            }
+          ]
+        },
+        {
           "name": "comment.line.double-slash.corex",
           "begin": "(//)",
           "beginCaptures": {
@@ -532,6 +596,49 @@
         {
           "name": "invalid.illegal.retired-attribute.corex",
           "match": "@(?:repr_c|align|packed|cache_aligned|zero_pad|link_name|link_section)\\b|(?<![A-Za-z0-9_])@(?:\\[|\\()"
+        },
+        {
+          "comment": "DR-25 @expect(…) and @allow(…) lint suppression attributes",
+          "name": "meta.annotation.lint.corex",
+          "begin": "(@)(expect|allow)(\\()",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.annotation.corex" },
+            "2": { "name": "storage.type.annotation.corex storage.type.annotation.lint.corex" },
+            "3": { "name": "punctuation.section.parens.begin.corex" }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": { "name": "punctuation.section.parens.end.corex" }
+          },
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#strings" },
+            {
+              "match": "(?<![A-Za-z0-9_-])([a-z_][a-z0-9_]*)[ \\t]*(:)(?!=)",
+              "captures": {
+                "1": { "name": "variable.other.property.corex" },
+                "2": { "name": "punctuation.separator.key-value.corex" }
+              }
+            },
+            {
+              "name": "constant.other.lint-code.corex",
+              "match": "(?<![A-Za-z0-9_-])W0[0-9]{3}(?![A-Za-z0-9_-])"
+            },
+            {
+              "name": "support.constant.lint-rule.corex",
+              "match": "\\b[a-z][a-z0-9]*+(?:-[a-z0-9]++)++\\b"
+            },
+            {
+              "name": "support.constant.lint-rule.corex",
+              "match": "(?<![A-Za-z0-9_-])(?!(?:true|false)\\b)[a-z][a-z0-9]*(?=[ \\t]*(?:,|\\)|$|//))"
+            },
+            {
+              "name": "punctuation.separator.comma.corex",
+              "match": ","
+            },
+            { "include": "#balanced-delimiters" },
+            { "include": "#core-rules" }
+          ]
         },
         {
           "name": "meta.annotation.corex",

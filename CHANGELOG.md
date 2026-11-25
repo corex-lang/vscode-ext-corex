@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -   Automatic `corex` binary discovery across `corex.executablePath`, workspace compiler builds (`build/stage0/corex`, `zig-out/bin/corex`, `build/corex`, and sibling `../corex/build/…`), `$COREX_HOME/bin/corex`, `~/.corex/bin/corex`, and `PATH`, with `--internal-core` auto-detection and strict Workspace Trust gating.
 -   Interactive Oxc-style dual-service status bar (`CoreX: Show Status Bar Menu`, `CoreX: Stop Language Server`, and `CoreX: Toggle Inlay Hints`) displaying live `corex lsp` and `corex fmt` status, trusted Markdown action links on hover, and a one-click QuickPick management menu.
 -   Non-backtracking Markdown syntax scopes inside `/#` and `/|` documentation comments (inline `` `code` ``, fenced blocks, headings, bold/italic emphasis, `[title](url)` links, and backslash escapes).
+-   Dedicated non-backtracking TextMate highlighting for `@expect(…)` and `@allow(…)` lint suppression attributes (`W0xxx` warning codes, `kebab-case` rule slugs, and `reason:` strings) alongside `// corex check:` (`file-expect`, `file-allow`, `expect`, `allow`) and `// corex fmt:` (`file-off`, `off`, `on`) comment directives and `-- <reason>` rationales.
 
 ### Changed
 

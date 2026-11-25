@@ -201,6 +201,23 @@ function createRpcError(
 }
 
 /**
+ * Normalizes an untrusted JSON-RPC `error` field into a `JsonRpcRequestError`, logging server errors.
+ *
+ * @param rpcErr    Untrusted response `error` value.
+ * @param onError   Optional protocol error callback for codes `> LSP_REQUEST_CANCELED`.
+ */
+function parseRpcError(rpcErr: unknown, onError?: (summary: string) => void): JsonRpcRequestError {
+  const err =
+    isRecord(rpcErr) && typeof rpcErr.code === 'number' && isStr(rpcErr.message)
+      ? createRpcError(rpcErr.message, rpcErr.code, rpcErr.data)
+      : createRpcError('RPC', JSONRPC_INTERNAL_ERROR);
+  if (err.code > LSP_REQUEST_CANCELED) {
+    onError?.(err.message);
+  }
+  return err;
+}
+
+/**
  * Returns `true` when `uri` is a non-empty string within `MAX_LSP_URI_BYTES` (`4096`).
  *
  * @param uri   Untrusted document URI value.
@@ -434,7 +451,7 @@ export function encodeJsonRpcFrame(message: object): Buffer {
  * @param options   Binary path, workspace roots, `--internal-core` flag, and event hooks.
  */
 export async function startLspClient(options: LspClientOptions): Promise<LspClientSession> {
-  const { onProtocolError } = options;
+  const { onProtocolError, rootUri, workspaceFolders } = options;
   const child = cpSpawn(
     options.binaryPath,
     ['lsp', '--stdio', ...(options.isInternalCore ? [INTERNAL_CORE_FLAG] : [])],
@@ -566,11 +583,12 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
         setTimer(
           () => {
             if (takePending(reqId)) {
+              onProtocolError?.(`Timeout: ${method}`);
               sendCancel();
-              reject(createRpcError('Timeout'));
+              reject(createRpcError('Timeout', LSP_SERVER_CANCELED));
             }
           },
-          internalTimeout || options.requestTimeoutMs || 15_000
+          internalTimeout || options.requestTimeoutMs || 30_000
         ),
         token?.onCancellationRequested(() => pending.has(reqId) && sendCancel()),
       ]);
@@ -644,13 +662,8 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
     const entry = isRpcId(msg.id) && takePending(msg.id);
     if (entry) {
       trace('receive', `#${msg.id}`, rawPayload);
-      const rpcErr = msg.error;
-      if (rpcErr !== undefined) {
-        entry[1](
-          isRecord(rpcErr) && typeof rpcErr.code === 'number' && isStr(rpcErr.message)
-            ? createRpcError(rpcErr.message, rpcErr.code, rpcErr.data)
-            : createRpcError('RPC', JSONRPC_INTERNAL_ERROR)
-        );
+      if (msg.error !== undefined) {
+        entry[1](parseRpcError(msg.error, onProtocolError));
       } else {
         entry[0](msg.result);
       }
@@ -689,7 +702,7 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
     sendNotify('$/setTrace', { value });
   }
 
-  const folders = options.workspaceFolders?.length ? options.workspaceFolders : null;
+  const folders = workspaceFolders?.[0] ? workspaceFolders : null;
 
   try {
     const rawInit = await sendReq(
@@ -701,11 +714,11 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
         },
         clientInfo: { name: 'corex', version: '1.0.0' },
         processId: process.pid,
-        rootUri: (options.rootUri === undefined ? folders?.[0]?.uri : options.rootUri) ?? null,
+        rootUri: (rootUri === undefined ? folders?.[0]?.uri : rootUri) ?? null,
         workspaceFolders: folders,
       },
       undefined,
-      0
+      15_000
     );
     if (!isRecord(rawInit) || !isRecord(rawInit.capabilities)) {
       throw new Error('Init');

@@ -3,7 +3,7 @@
  *
  * Loads live `vscode-oniguruma` (`onig.wasm`) and `vscode-textmate` grammars for `source.corex`
  * and `markdown.corex.codeblock`, verifying all 3 scope invariants across `../corex/core/` modules,
- * `../corex/docs/COMPARISONS.md` showcases, and the complete `DR-22` / `DR-24` lexical taxonomy.
+ * `../corex/docs/COMPARISONS.md` showcases, and the complete `DR-22` / `DR-24` / `DR-25` taxonomy.
  *
  * Enforces `< 50 ms` non-backtracking execution across 4000-character adversarial inputs.
  */
@@ -1307,6 +1307,245 @@ describe('Strings, recursive {expr=:#06x} interpolation, numbers, and closure vs
   });
 });
 
+// --------- DR-25 Lint Suppressions & Tool Directives ----------
+
+describe('DR-25 @expect/@allow lint suppression attributes and // corex check:/fmt: directives', () => {
+  it('tokenizes single-line and multi-line @expect and @allow attributes without splitting keyword slugs', () => {
+    const attrSnippet = [
+      '@expect(collapsible-if, manual-orelse-or-try, W0203, reason: "matrix loop")',
+      'pub fn single_line_expect(val: i32) -> i32 {',
+      '    return val;',
+      '}',
+      '@expect(',
+      '    single-char-ident,',
+      '    needless-bool-branch, // inline comment inside multiline @expect',
+      '    unused-mut-binding,',
+      '    clone-on-copy,',
+      '    W0002,',
+      '    reason: "multiline matrix loop",',
+      ')',
+      'pub fn multi_line_expect(val: i32) -> i32 {',
+      '    return val;',
+      '}',
+      '@allow(non-canonical-case, reason: "C FFI binding")',
+      'pub fn ffi_binding_stub() {}',
+      '@expect(style, reason: "single-word selector fallback")',
+      'pub fn single_word_selector_probe() {}',
+      '@expected_custom_attr(flag: true)',
+      'pub fn non_lint_attr_prefix() {}',
+    ].join('\n');
+
+    const tokens = tokenizeNonWhitespace(getCorexGrammar(), attrSnippet);
+    assertStrictCorexScopeInvariants('dr25-lint-attributes', tokens);
+
+    expect(findToken(tokens, '@', 0).leafScope).toBe('punctuation.definition.annotation.corex');
+    const expectSingleTok = findToken(tokens, 'expect', 0);
+    expect(expectSingleTok.leafScope).toBe('storage.type.annotation.lint.corex');
+    expect(hasScopeMatching(expectSingleTok, 'storage.type.annotation.corex')).toBe(true);
+    expect(hasScopeMatching(expectSingleTok, 'meta.annotation.lint.corex')).toBe(true);
+    expect(findToken(tokens, '(', 0).leafScope).toBe('punctuation.section.parens.begin.corex');
+
+    for (const slug of [
+      'collapsible-if',
+      'manual-orelse-or-try',
+      'single-char-ident',
+      'needless-bool-branch',
+      'unused-mut-binding',
+      'clone-on-copy',
+      'non-canonical-case',
+      'style',
+    ]) {
+      const slugTok = findToken(tokens, slug);
+      expect(slugTok.leafScope).toBe('support.constant.lint-rule.corex');
+      expect(hasScopeMatching(slugTok, 'meta.annotation.lint.corex')).toBe(true);
+    }
+
+    expect(findToken(tokens, 'W0203').leafScope).toBe('constant.other.lint-code.corex');
+    expect(findToken(tokens, 'W0002').leafScope).toBe('constant.other.lint-code.corex');
+    expect(findToken(tokens, ',', 0).leafScope).toBe('punctuation.separator.comma.corex');
+
+    expect(findToken(tokens, 'reason', 0).leafScope).toBe('variable.other.property.corex');
+    expect(findToken(tokens, ':', 0).leafScope).toBe('punctuation.separator.key-value.corex');
+    expect(findToken(tokens, 'matrix loop').leafScope).toBe('string.quoted.double.corex');
+    expect(findToken(tokens, ')', 0).leafScope).toBe('punctuation.section.parens.end.corex');
+
+    expect(findToken(tokens, 'expect', 1).leafScope).toBe('storage.type.annotation.lint.corex');
+    expect(findToken(tokens, 'reason', 1).leafScope).toBe('variable.other.property.corex');
+    expect(findToken(tokens, 'multiline matrix loop').leafScope).toBe('string.quoted.double.corex');
+
+    const allowTok = findToken(tokens, 'allow');
+    expect(allowTok.leafScope).toBe('storage.type.annotation.lint.corex');
+    expect(hasScopeMatching(allowTok, 'storage.type.annotation.corex')).toBe(true);
+    expect(findToken(tokens, 'reason', 2).leafScope).toBe('variable.other.property.corex');
+    expect(findToken(tokens, 'C FFI binding').leafScope).toBe('string.quoted.double.corex');
+
+    const nonLintAttr = findToken(tokens, 'expected_custom_attr');
+    expect(nonLintAttr.leafScope).toBe('storage.type.annotation.corex');
+    expect(hasScopeMatching(nonLintAttr, 'meta.annotation.lint.corex')).toBe(false);
+
+    for (const fnName of [
+      'single_line_expect',
+      'multi_line_expect',
+      'ffi_binding_stub',
+      'single_word_selector_probe',
+      'non_lint_attr_prefix',
+    ]) {
+      const fnTok = findToken(tokens, fnName);
+      expect(fnTok.leafScope).toBe('entity.name.function.corex');
+      expect(hasScopeMatching(fnTok, 'meta.annotation.lint.corex')).toBe(false);
+    }
+  });
+
+  it('tokenizes all 44 canonical DR-25 lint slugs and W0xxx warning codes cleanly', () => {
+    const all44Rules = [
+      ['W0002', 'unused-suppression'],
+      ['W0003', 'missing-suppression-reason'],
+      ['W0004', 'prefer-expect-over-allow'],
+      ['W0101', 'redundant-escape-sequence'],
+      ['W0102', 'unicode-trojan-control'],
+      ['W0103', 'confusable-ident'],
+      ['W0104', 'ambiguous-unicode-text'],
+      ['W0119', 'useless-format-string'],
+      ['W0120', 'uninterpolated-fmt-braces'],
+      ['W0121', 'needless-raw-string-hashes'],
+      ['W0122', 'ungrouped-numeric-literal'],
+      ['W0123', 'non-upper-hex-literal'],
+      ['W0201', 'non-canonical-case'],
+      ['W0202', 'non-idiomatic-syntax'],
+      ['W0203', 'single-char-ident'],
+      ['W0204', 'shadowed-binding'],
+      ['W0205', 'bool-predicate-naming'],
+      ['W0206', 'getter-prefix-noise'],
+      ['W0207', 'conversion-prefix-mismatch'],
+      ['W0208', 'redundant-literal-type'],
+      ['W0209', 'needless-trailing-return'],
+      ['W0210', 'manual-assign-or-swap'],
+      ['W0308', 'unused-region-alloc'],
+      ['W0329', 'vacated-projection-abort'],
+      ['W0330', 'ambient-dead-capability'],
+      ['W0332', 'nondeterministic-sim-source'],
+      ['W0333', 'redundant-private-contract'],
+      ['W0334', 'redundant-move-clone'],
+      ['W0335', 'string-concat-in-loop'],
+      ['W0401', 'unreachable-pattern'],
+      ['W0402', 'unused-binding'],
+      ['W0403', 'deprecated-use'],
+      ['W0404', 'unused-import'],
+      ['W0405', 'unused-mut-binding'],
+      ['W0406', 'unused-pkg-visibility'],
+      ['W0407', 'needless-bool-branch'],
+      ['W0408', 'collapsible-if'],
+      ['W0409', 'simplifiable-match'],
+      ['W0410', 'manual-orelse-or-try'],
+      ['W0411', 'single-use-temp'],
+      ['W0412', 'clone-on-copy'],
+      ['W0413', 'trivially-copy-pass-by-ref'],
+      ['W0414', 'identical-operands'],
+      ['W0501', 'inlining-budget-exceeded'],
+    ] as const;
+
+    expect(all44Rules).toHaveLength(44);
+    const catalogLines: string[] = [];
+    for (const [code, slug] of all44Rules) {
+      catalogLines.push(`@expect(${code}, ${slug}, reason: "catalog parity")`);
+    }
+    catalogLines.push('pub fn catalog_anchor() {}');
+
+    const tokens = tokenizeNonWhitespace(getCorexGrammar(), catalogLines.join('\n'));
+    assertStrictCorexScopeInvariants('dr25-all-44-rules', tokens);
+
+    for (const [code, slug] of all44Rules) {
+      expect(findToken(tokens, code).leafScope).toBe('constant.other.lint-code.corex');
+      expect(findToken(tokens, slug).leafScope).toBe('support.constant.lint-rule.corex');
+    }
+  });
+
+  it('tokenizes // corex check: and // corex fmt: preamble and trailing directives with -- rationales', () => {
+    const directiveSnippet = [
+      '// corex check: file-expect(unused-pkg-visibility, single-char-ident) -- Phase 11.2 reserve',
+      '// corex check: file-allow(non-canonical-case, W0202) -- generated bindings',
+      '// corex fmt: file-off -- hand-aligned lookup matrix',
+      'pub fn directive_demo() {',
+      '    let x = 1; // corex check: expect(unused-binding) -- intentional `x` fixture',
+      '    let y = 2; // corex check: allow(W0402) -- target-gated binding',
+      '    // corex fmt: off -- SIMD table',
+      '    let lane = 0;',
+      '    // corex fmt: on',
+      '    // corex fmt: off --',
+      '    let recovered = lane + x + y;',
+      '    _ = recovered;',
+      '}',
+      '// corex checking prose comment (not a directive)',
+      '//// corex check: banner comment (4 slashes)',
+    ].join('\n');
+
+    const tokens = tokenizeNonWhitespace(getCorexGrammar(), directiveSnippet);
+    assertStrictCorexScopeInvariants('dr25-comment-directives', tokens);
+
+    expect(findToken(tokens, '//', 0).leafScope).toBe('punctuation.definition.comment.corex');
+    expect(findToken(tokens, 'corex', 0).leafScope).toBe('keyword.control.directive.corex');
+    expect(findToken(tokens, 'check', 0).leafScope).toBe('keyword.control.directive.corex');
+    expect(findToken(tokens, ':', 0).leafScope).toBe('punctuation.separator.key-value.corex');
+    expect(findToken(tokens, 'file-expect').leafScope).toBe('keyword.other.directive.corex');
+    expect(findToken(tokens, 'unused-pkg-visibility').leafScope).toBe(
+      'support.constant.lint-rule.corex'
+    );
+    expect(findToken(tokens, 'single-char-ident').leafScope).toBe(
+      'support.constant.lint-rule.corex'
+    );
+    expect(findToken(tokens, '--', 0).leafScope).toBe('punctuation.separator.comment.corex');
+    expect(findToken(tokens, ' Phase 11.2 reserve').leafScope).toBe(
+      'comment.line.double-slash.rationale.corex'
+    );
+
+    expect(findToken(tokens, 'file-allow').leafScope).toBe('keyword.other.directive.corex');
+    expect(findToken(tokens, 'non-canonical-case').leafScope).toBe(
+      'support.constant.lint-rule.corex'
+    );
+    expect(findToken(tokens, 'W0202').leafScope).toBe('constant.other.lint-code.corex');
+    expect(findToken(tokens, ' generated bindings').leafScope).toBe(
+      'comment.line.double-slash.rationale.corex'
+    );
+
+    expect(findToken(tokens, 'fmt', 0).leafScope).toBe('keyword.control.directive.corex');
+    expect(findToken(tokens, 'file-off').leafScope).toBe('keyword.other.directive.corex');
+    expect(findToken(tokens, ' hand-aligned lookup matrix').leafScope).toBe(
+      'comment.line.double-slash.rationale.corex'
+    );
+
+    expect(findToken(tokens, 'expect').leafScope).toBe('keyword.other.directive.corex');
+    expect(findToken(tokens, 'unused-binding').leafScope).toBe('support.constant.lint-rule.corex');
+    expect(findToken(tokens, ' intentional ').leafScope).toBe(
+      'comment.line.double-slash.rationale.corex'
+    );
+    expect(findToken(tokens, 'x', 1).leafScope).toBe('punctuation.definition.raw.markdown.corex');
+    expect(findToken(tokens, ' fixture').leafScope).toBe(
+      'comment.line.double-slash.rationale.corex'
+    );
+
+    expect(findToken(tokens, 'allow').leafScope).toBe('keyword.other.directive.corex');
+    expect(findToken(tokens, 'W0402').leafScope).toBe('constant.other.lint-code.corex');
+
+    expect(findToken(tokens, 'off', 0).leafScope).toBe('keyword.other.directive.corex');
+    expect(findToken(tokens, ' SIMD table').leafScope).toBe(
+      'comment.line.double-slash.rationale.corex'
+    );
+    expect(findToken(tokens, 'on').leafScope).toBe('keyword.other.directive.corex');
+
+    const recoveredTok = findToken(tokens, 'recovered', 0);
+    expect(recoveredTok.leafScope).toBe('variable.other.readwrite.corex');
+    expect(hasScopeMatching(recoveredTok, 'meta.directive.comment.corex')).toBe(false);
+    expect(hasScopeMatching(recoveredTok, 'comment')).toBe(false);
+
+    expect(findToken(tokens, ' corex checking prose comment (not a directive)').leafScope).toBe(
+      'comment.line.double-slash.corex'
+    );
+    expect(findToken(tokens, '// corex check: banner comment (4 slashes)').leafScope).toBe(
+      'comment.line.double-slash.corex'
+    );
+  });
+});
+
 // --------------- ReDoS Non-Backtracking Latency ---------------
 
 describe('Non-backtracking ReDoS latency (< 50 ms on 4000-char adversarial lines)', () => {
@@ -1331,6 +1570,10 @@ describe('Non-backtracking ReDoS latency (< 50 ms on 4000-char adversarial lines
       `let qual = A${'a'.repeat(2005)}.B${'b'.repeat(2005)}_;`,
       `foo[A${'a'.repeat(4005)}`,
       `let pascal = A${'a'.repeat(4005)};`,
+      `@expect(${'a-b-'.repeat(1005)}`,
+      `@expect(${'a-b-'.repeat(1005)}c`,
+      `// corex check: expect(${'a-b-'.repeat(1005)}`,
+      `// corex check: expect(${'a-b-'.repeat(1005)}c`,
     ];
 
     for (const longLine of adversarialLines) {
@@ -1343,6 +1586,13 @@ describe('Non-backtracking ReDoS latency (< 50 ms on 4000-char adversarial lines
         bestElapsed = Math.min(bestElapsed, performance.now() - startTime);
       }
       expect(bestElapsed).toBeLessThan(50);
+    }
+
+    for (const dr25Unclosed of adversarialLines.slice(-4)) {
+      assertStrictCorexScopeInvariants(
+        `dr25-adversarial-${dr25Unclosed.slice(0, 16)}`,
+        tokenizeNonWhitespace(grammar, dr25Unclosed)
+      );
     }
   });
 

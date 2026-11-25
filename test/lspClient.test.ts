@@ -17,8 +17,10 @@ import type { ExtensionContext } from 'vscode';
 import { resolveCorexBinary } from '@/binary';
 import {
   hasArrayProp,
+  isJsonRpcRequestError,
   isRecord,
   isStr,
+  LSP_SERVER_CANCELED,
   MAX_LSP_CONTENT_LENGTH,
   notifyTextDocument,
   requestTextDocument,
@@ -30,6 +32,7 @@ import { invalidateConfigCache } from '@/config';
 import { activate, deactivate } from '@/extension';
 import type {
   LspClientSession,
+  LspDiagnostic,
   LspDocumentDiagnosticReport,
   LspHover,
   LspLocation,
@@ -44,6 +47,8 @@ import {
   changeMockDocument,
   commands,
   createMockCancelToken,
+  DiagnosticSeverity,
+  DiagnosticTag,
   EndOfLine,
   getMockState,
   openMockDocument,
@@ -59,14 +64,29 @@ import {
   Uri,
 } from './__mocks__/vscode';
 import type {
+  MockCodeAction,
+  MockDiagnostic,
   MockDisposable,
   MockHover,
   MockMarkdownString,
+  MockRange,
   MockTextDocument,
   MockTextEdit,
+  MockUri,
 } from './__mocks__/vscode';
 
 // ---------------------------------------- TYPES ----------------------------------------
+
+/** Structural shape of a registered `CodeActionsProvider` in `vscode` mock. */
+interface CodeActionsProviderHandle {
+  /** Queries quick-fix code actions overlapping `range` in `document`. */
+  readonly provideCodeActions: (
+    document: MockTextDocument,
+    range: MockRange,
+    context: { readonly diagnostics: readonly MockDiagnostic[] },
+    token: { readonly isCancellationRequested: boolean; readonly onCancellationRequested: unknown }
+  ) => Promise<MockCodeAction[] | null>;
+}
 
 /** Structural shape of a registered `DocumentFormattingEditProvider` in `vscode` mock. */
 interface FormattingProviderHandle {
@@ -86,6 +106,44 @@ interface HoverProviderHandle {
     position: { readonly character: number; readonly line: number },
     token: { readonly isCancellationRequested: boolean; readonly onCancellationRequested: unknown }
   ) => Promise<MockHover | null>;
+}
+
+/** Structural shape of a registered `DefinitionProvider` in `vscode` mock. */
+interface DefinitionProviderHandle {
+  /** Queries definition location(s) at `position`. */
+  readonly provideDefinition: (
+    document: MockTextDocument,
+    position: { readonly character: number; readonly line: number },
+    token: { readonly isCancellationRequested: boolean; readonly onCancellationRequested: unknown }
+  ) => Promise<unknown>;
+}
+
+/** Structural shape of a registered `DocumentSymbolProvider` in `vscode` mock. */
+interface DocumentSymbolProviderHandle {
+  /** Queries hierarchical document symbols for `document`. */
+  readonly provideDocumentSymbols: (
+    document: MockTextDocument,
+    token: { readonly isCancellationRequested: boolean; readonly onCancellationRequested: unknown }
+  ) => Promise<readonly unknown[] | null>;
+}
+
+/** Structural shape of a registered `DocumentSemanticTokensProvider` in `vscode` mock. */
+interface SemanticTokensProviderHandle {
+  /** Queries full semantic tokens for `document`. */
+  readonly provideDocumentSemanticTokens: (
+    document: MockTextDocument,
+    token: { readonly isCancellationRequested: boolean; readonly onCancellationRequested: unknown }
+  ) => Promise<{ readonly data: Uint32Array } | null>;
+}
+
+/** Structural shape of a registered `RenameProvider` in `vscode` mock. */
+interface RenameProviderHandle {
+  /** Validates rename target range and placeholder at `position`. */
+  readonly prepareRename: (
+    document: MockTextDocument,
+    position: { readonly character: number; readonly line: number },
+    token: { readonly isCancellationRequested: boolean; readonly onCancellationRequested: unknown }
+  ) => Promise<{ readonly placeholder: string; readonly range: unknown } | undefined>;
 }
 
 /** Recorded JSON-RPC trace event captured via `onTrace`. */
@@ -113,13 +171,13 @@ const VALID_MAIN_CX = [
   '// Computes the wrapping sum of two 32-bit signed integers.',
   '@no_alloc @no_panic',
   'pub fn add_pair(left_val: i32, right_val: i32) -> i32 {',
-  '    return left_val +% right_val;',
+  '    left_val +% right_val',
   '}',
   '',
   '// Entry point combining paired sums.',
   'pub fn main() -> i32 {',
   '    let total = add_pair(10, 21);',
-  '    return add_pair(total, total);',
+  '    add_pair(total, total)',
   '}',
   '',
 ].join('\n');
@@ -286,6 +344,177 @@ function hasCleanDiagnosticsAtVersion(
     }
   }
   return false;
+}
+
+/**
+ * Returns `true` when `batches` at `version` contains at least one `severity === 1` error diagnostic.
+ *
+ * @param batches   Recorded push diagnostic notifications.
+ * @param version   Minimum document version number.
+ */
+function hasErrorDiagnosticsAtVersion(
+  batches: readonly LspPublishDiagnosticsParams[],
+  version: number
+): boolean {
+  const latest = batches.at(-1);
+  if (latest === undefined || (latest.version !== undefined && latest.version < version)) {
+    return false;
+  }
+  for (const diag of latest.diagnostics) {
+    if (diag.severity === 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Awaits the `publishDiagnostics` notification at `expectedVersion` routed through `registerResolver`.
+ *
+ * @param registerResolver   Hook installing the diagnostic callback.
+ * @param expectedVersion    Target document version to resolve on.
+ */
+function waitNextBenchDiagnostic(
+  registerResolver: (cb: ((params: LspPublishDiagnosticsParams) => void) | undefined) => void,
+  expectedVersion: number
+): Promise<LspPublishDiagnosticsParams> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      registerResolver(undefined);
+      reject(new Error(`Timed out waiting for push diagnostic v${expectedVersion}`));
+    }, 3000);
+    function handleFrame(params: LspPublishDiagnosticsParams): void {
+      if (params.version !== undefined && params.version < expectedVersion) {
+        registerResolver(handleFrame);
+        return;
+      }
+      clearTimeout(timeoutId);
+      resolve(params);
+    }
+    registerResolver(handleFrame);
+  });
+}
+
+/**
+ * Finds the first 0-based `(line, character)` of `ident` on a line containing `anchor` inside `text`.
+ *
+ * @param text     Full UTF-16 document text.
+ * @param anchor   Line substring disambiguating the target site.
+ * @param ident    Identifier token to point into.
+ */
+function findAnchoredPosition(
+  text: string,
+  anchor: string,
+  ident: string
+): { readonly character: number; readonly line: number } {
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    const lineText = lines[i] ?? '';
+    if (lineText.includes(anchor) && lineText.includes(ident)) {
+      return new Position(i, lineText.indexOf(ident) + 2);
+    }
+  }
+  throw new Error(`Missing anchor "${anchor}" / "${ident}" in fixture.`);
+}
+
+/**
+ * Finds the first `MockCodeAction` whose `title` contains `titleFragment`.
+ *
+ * @param actions         Candidate code actions returned by `provideCodeActions`.
+ * @param titleFragment   Required substring inside `action.title`.
+ */
+function findActionByTitle(
+  actions: readonly MockCodeAction[],
+  titleFragment: string
+): MockCodeAction | undefined {
+  for (const action of actions) {
+    if (action.title.includes(titleFragment)) {
+      return action;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Finds the first wire `LspDiagnostic` whose `code` equals `expectedCode`.
+ *
+ * @param diagnostics    Wire diagnostics from `publishDiagnostics` or `textDocument/diagnostic`.
+ * @param expectedCode   Exact bijective code string (e.g., `'W0122/ungrouped-numeric-literal'`).
+ */
+function findLspDiagByCode(
+  diagnostics: readonly LspDiagnostic[],
+  expectedCode: string
+): LspDiagnostic | undefined {
+  for (const diag of diagnostics) {
+    if (diag.code === expectedCode) {
+      return diag;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Finds the first `MockDiagnostic` whose `code` equals `expectedCode`.
+ *
+ * @param diagnostics    Mapped diagnostics from `MockDiagnosticCollection`.
+ * @param expectedCode   Exact bijective code string (e.g., `'W0203/single-char-ident'`).
+ */
+function findMockDiagByCode(
+  diagnostics: readonly MockDiagnostic[],
+  expectedCode: string
+): MockDiagnostic | undefined {
+  for (const diag of diagnostics) {
+    if (diag.code === expectedCode) {
+      return diag;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Locates `needle` inside `sourceText` and returns its 0-based single-line `MockRange`.
+ *
+ * @param sourceText   Full `LF` or `CRLF` document text.
+ * @param needle       Unique single-line substring to locate.
+ */
+function findSubstringRange(sourceText: string, needle: string): MockRange {
+  const lines = sourceText.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    const col = (lines[i] ?? '').indexOf(needle);
+    if (col !== -1) {
+      return new Range(i, col, i, col + needle.length);
+    }
+  }
+  throw new Error(`Missing substring ${JSON.stringify(needle)} in fixture.`);
+}
+
+/**
+ * Asserts that `actions` includes a Quick Fix matching `titleFragment`, `isPreferred`, `expectedCode`, and `expectedText`.
+ *
+ * @param actions         Candidate Quick Fix actions.
+ * @param docUri          Target `MockUri` edited by the Quick Fix.
+ * @param titleFragment   Unique substring identifying the action title.
+ * @param isPreferred     Expected `isPreferred` flag (`true` for `MachineApplicable`).
+ * @param expectedCode    Expected bijective `W0xxx/slug` diagnostic code.
+ * @param expectedText    Expected `newText` replacement string.
+ */
+function assertPrimaryQuickFix(
+  actions: readonly MockCodeAction[],
+  docUri: MockUri,
+  titleFragment: string,
+  isPreferred: boolean,
+  expectedCode: string,
+  expectedText: string
+): void {
+  const matched = findActionByTitle(actions, titleFragment);
+  expect(matched).toBeDefined();
+  if (matched === undefined) {
+    return;
+  }
+  expect(matched.isPreferred).toBe(isPreferred);
+  expect(matched.title.endsWith('(unsafe fix)')).toBe(!isPreferred);
+  expect(matched.diagnostics?.[0]?.code).toBe(expectedCode);
+  expect(matched.edit?.get(docUri)[0]?.newText).toBe(expectedText);
 }
 
 // ---------------------------------------- MAIN -----------------------------------------
@@ -526,7 +755,7 @@ describe('Headless corex lsp lifecycle, diagnostics, navigation, tokens, rename,
     expect(hasArrayProp(deltaTokens, 'edits')).toBe(true);
 
     const rawCompletion = await session.request('textDocument/completion', {
-      position: { character: 14, line: 11 },
+      position: { character: 7, line: 11 },
       textDocument: { uri: mainUri },
     });
     const completionItems = hasArrayProp(rawCompletion, 'items')
@@ -1163,4 +1392,719 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
       new Range(1, 4, 1, 18),
     ]);
   });
+
+  it('logs request timeouts via onProtocolError and rejects with LSP_SERVER_CANCELED (-32802)', async () => {
+    const mockDir = await mkdtemp(path.join(tmpdir(), 'corex-timeout-'));
+    createdTempDirs.push(mockDir);
+    const stalledServerScript = [
+      'let buf = Buffer.alloc(0);',
+      'function send(msg) {',
+      '  const body = JSON.stringify(msg);',
+      String.raw`  process.stdout.write("Content-Length: " + Buffer.byteLength(body) + "\r\n\r\n" + body);`,
+      '}',
+      'process.stdin.on("data", (chunk) => {',
+      '  buf = Buffer.concat([buf, chunk]);',
+      '  while (true) {',
+      String.raw`    const sep = buf.indexOf("\r\n\r\n");`,
+      '    if (sep < 0) break;',
+      String.raw`    const m = /content-length:\s*(\d+)/i.exec(buf.subarray(0, sep).toString("utf8"));`,
+      '    if (!m) break;',
+      '    const len = Number(m[1]);',
+      '    if (buf.length < sep + 4 + len) break;',
+      '    const msg = JSON.parse(buf.subarray(sep + 4, sep + 4 + len).toString("utf8"));',
+      '    buf = buf.subarray(sep + 4 + len);',
+      '    if (msg.method === "initialize") {',
+      '      send({ jsonrpc: "2.0", id: msg.id, result: { capabilities: {} } });',
+      '    } else if (msg.method === "shutdown") {',
+      '      send({ jsonrpc: "2.0", id: msg.id, result: null });',
+      '    } else if (msg.method === "exit") {',
+      '      process.exit(0);',
+      '    }',
+      '  }',
+      '});',
+    ].join('\n');
+    await writeFile(path.join(mockDir, 'lsp'), stalledServerScript, 'utf8');
+
+    const protocolWarnings: string[] = [];
+    const session = await startLspClient({
+      binaryPath: process.execPath,
+      cwd: mockDir,
+      onProtocolError: (summary) => {
+        protocolWarnings.push(summary);
+      },
+      requestTimeoutMs: 40,
+    });
+    spawnedClients.push(session);
+
+    let caughtErr: unknown = undefined;
+    try {
+      await session.request('textDocument/semanticTokens/full', {
+        textDocument: { uri: Uri.file(path.join(mockDir, 'sample.cx')).toString() },
+      });
+    } catch (error: unknown) {
+      caughtErr = error;
+    }
+
+    expect(isJsonRpcRequestError(caughtErr)).toBe(true);
+    if (isJsonRpcRequestError(caughtErr)) {
+      expect(caughtErr.code).toBe(LSP_SERVER_CANCELED);
+      expect(caughtErr.message).toBe('Timeout');
+    }
+    expect(protocolWarnings).toContain('Timeout: textDocument/semanticTokens/full');
+  });
+
+  it('serves concurrent documentSymbol, semanticTokens, hover, definition, and prepareRename across dense stdlib/cx tabs', async () => {
+    const openedStdlibDocs: MockTextDocument[] = [];
+    for (const fileName of ['col.cx', 'str.cx', 'mem.cx', 'math.cx']) {
+      const fullPath = path.join(COREX_ROOT, 'stdlib', 'cx', fileName);
+      openedStdlibDocs.push(
+        openMockDocument({ fsPath: fullPath, text: await readFile(fullPath, 'utf8') })
+      );
+    }
+    const [colDoc, strDoc, memDoc, mathDoc] = openedStdlibDocs as [
+      MockTextDocument,
+      MockTextDocument,
+      MockTextDocument,
+      MockTextDocument,
+    ];
+    const mathText = mathDoc.getText();
+    const tValPos = findAnchoredPosition(mathText, 'let err_term: f64 =', 't_val');
+    const ldexpPos = findAnchoredPosition(mathText, 'return ldexp_f64(', 'ldexp_f64');
+
+    setWorkspaceTrusted(true);
+    setWorkspaceFolders([COREX_ROOT]);
+    setWorkspaceConfig({ executablePath: getLiveBinaryPath(), 'lsp.enable': true });
+
+    activate(createMockExtensionContext());
+    await waitUntil(
+      () => getMockState().statusBarItems[0]?.text === '$(check) CoreX',
+      'LSP ready on COREX_ROOT with 4 dense stdlib tabs'
+    );
+
+    const mockState = getMockState();
+    const docSymProvider = mockState.providers.documentSymbol[0] as DocumentSymbolProviderHandle;
+    const semProvider = mockState.providers
+      .documentSemanticTokens[0] as SemanticTokensProviderHandle;
+    const hoverProvider = mockState.providers.hover[0] as HoverProviderHandle;
+    const defProvider = mockState.providers.definition[0] as DefinitionProviderHandle;
+    const renameProvider = mockState.providers.rename[0] as RenameProviderHandle;
+    const { token } = createMockCancelToken();
+
+    const burstStart = performance.now();
+    const [
+      colOutline,
+      colSticky,
+      strOutline,
+      memOutline,
+      mathOutline,
+      mathSemTokens,
+      tValHover,
+      tValDef,
+      tValPrepRename,
+      ldexpHover,
+      ldexpDef,
+    ] = await Promise.all([
+      docSymProvider.provideDocumentSymbols(colDoc, token),
+      docSymProvider.provideDocumentSymbols(colDoc, token),
+      docSymProvider.provideDocumentSymbols(strDoc, token),
+      docSymProvider.provideDocumentSymbols(memDoc, token),
+      docSymProvider.provideDocumentSymbols(mathDoc, token),
+      semProvider.provideDocumentSemanticTokens(mathDoc, token),
+      hoverProvider.provideHover(mathDoc, tValPos, token),
+      defProvider.provideDefinition(mathDoc, tValPos, token),
+      renameProvider.prepareRename(mathDoc, tValPos, token),
+      hoverProvider.provideHover(mathDoc, ldexpPos, token),
+      defProvider.provideDefinition(mathDoc, ldexpPos, token),
+    ]);
+
+    expect(performance.now() - burstStart).toBeLessThan(8000);
+    expect(colOutline !== null && colOutline.length > 10).toBe(true);
+    expect(colSticky?.length).toBe(colOutline?.length);
+    expect(strOutline !== null && strOutline.length > 10).toBe(true);
+    expect(memOutline !== null && memOutline.length > 5).toBe(true);
+    expect(mathOutline !== null && mathOutline.length > 20).toBe(true);
+    expect(mathSemTokens !== null && mathSemTokens.data.length > 1000).toBe(true);
+    expect(tValHover).not.toBeNull();
+    expect(tValDef).not.toBeNull();
+    expect(tValPrepRename?.placeholder).toBe('t_val');
+    expect(ldexpHover).not.toBeNull();
+    expect(ldexpDef).not.toBeNull();
+
+    // Remove `: f64` from `fn ln_f64(x: f64, /) -> f64 {` and verify red diagnostics + intact tokens/hover:
+    changeMockDocument(
+      mathDoc,
+      mathText.replace('fn ln_f64(x: f64, /) -> f64 {', 'fn ln_f64(x, /) -> f64 {')
+    );
+    await waitUntil(
+      () => (mockState.collections[0]?.get(mathDoc.uri)?.length ?? 0) > 0,
+      'syntax error diagnostics after deleting : f64 in math.cx'
+    );
+    const brokenTokens = await semProvider.provideDocumentSemanticTokens(mathDoc, token);
+    expect(brokenTokens?.data.length).toBeGreaterThan(1000);
+    expect(await hoverProvider.provideHover(mathDoc, tValPos, token)).not.toBeNull();
+
+    // Restore `: f64` and verify diagnostics clear and semantic tokens + hover + definition remain active:
+    changeMockDocument(mathDoc, mathText);
+    await waitUntil(
+      () => (mockState.collections[0]?.get(mathDoc.uri)?.length ?? -1) === 0,
+      'cleared diagnostics after restoring : f64 in math.cx'
+    );
+    const restoredTokens = await semProvider.provideDocumentSemanticTokens(mathDoc, token);
+    expect(restoredTokens?.data.length).toBeGreaterThan(1000);
+    expect(await hoverProvider.provideHover(mathDoc, tValPos, token)).not.toBeNull();
+    expect(await defProvider.provideDefinition(mathDoc, ldexpPos, token)).not.toBeNull();
+    expect((mockState.outputChannels[0]?.lines ?? []).join('\n')).not.toContain('Timeout:');
+    expect((mockState.outputChannels[0]?.lines ?? []).join('\n')).not.toContain('⚠');
+  }, 30_000);
+});
+
+// --------- 5. DR-25 Linter, Quick Fixes & Ranged Sync ---------
+
+describe('Headless corex lsp DR-25 linter diagnostics, Quick Fix code actions, and ranged didChange resilience', () => {
+  it('publishes bijective W0xxx/slug Warning diagnostics (never Error) and DiagnosticTag.Unnecessary on unused items', async () => {
+    const workspaceDir = await makeTempWorkspace();
+    const helperPath = path.join(workspaceDir, 'src', 'helper.cx');
+    const mainPath = path.join(workspaceDir, 'src', 'main.cx');
+    const lintFixture = [
+      'pub mod helper;',
+      'use helper.spare_helper;',
+      '',
+      'pub fn inspect_lints() -> u32 {',
+      '    let c = 0xdeadbeef_u32;',
+      '    let hex_mask = 0xdead_beef_u32;',
+      '    let unused_local = 42_u32;',
+      '    c ^ hex_mask',
+      '}',
+      '',
+    ].join('\n');
+    await writeFile(helperPath, 'pub fn spare_helper() -> u32 {\n    1_u32\n}\n', 'utf8');
+    await writeFile(mainPath, lintFixture, 'utf8');
+
+    const mainUri = Uri.file(mainPath).toString();
+    const pushedBatches: LspPublishDiagnosticsParams[] = [];
+
+    const session = await startLspClient({
+      binaryPath: getLiveBinaryPath(),
+      cwd: workspaceDir,
+      onPublishDiagnostics: (params) => {
+        if (Uri.parse(params.uri).toString() === mainUri) {
+          pushedBatches.push(params);
+        }
+      },
+      workspaceFolders: [{ name: 'lsp-verify', uri: Uri.file(workspaceDir).toString() }],
+    });
+    spawnedClients.push(session);
+
+    notifyTextDocument(session, 'didOpen', mainUri, {
+      languageId: 'corex',
+      text: lintFixture,
+      version: 1,
+    });
+    await waitUntil(() => pushedBatches.length >= 1, 'DR-25 push lint diagnostics');
+
+    const wireDiags = pushedBatches.at(-1)?.diagnostics ?? [];
+    expect(wireDiags.length).toBeGreaterThanOrEqual(5);
+    for (const wireDiag of wireDiags) {
+      expect(wireDiag.severity).toBe(2);
+      expect(wireDiag.severity).not.toBe(1);
+      expect(wireDiag.source).toBe('corex');
+    }
+
+    expect(findLspDiagByCode(wireDiags, 'W0203/single-char-ident')?.tags).toBeUndefined();
+    expect(findLspDiagByCode(wireDiags, 'W0122/ungrouped-numeric-literal')?.tags).toBeUndefined();
+    expect(findLspDiagByCode(wireDiags, 'W0123/non-upper-hex-literal')?.tags).toBeUndefined();
+    expect(findLspDiagByCode(wireDiags, 'W0402/unused-binding')?.tags).toEqual([1]);
+    expect(findLspDiagByCode(wireDiags, 'W0404/unused-import')?.tags).toEqual([1]);
+
+    const pullReport = await requestTextDocument(
+      session,
+      'diagnostic',
+      mainUri,
+      {},
+      isDiagnosticReport
+    );
+    expect(pullReport?.kind).toBe('full');
+    if (pullReport?.kind === 'full') {
+      expect(findLspDiagByCode(pullReport.items, 'W0203/single-char-ident')?.severity).toBe(2);
+      expect(findLspDiagByCode(pullReport.items, 'W0404/unused-import')?.tags).toEqual([1]);
+    }
+    await stopLspClient(session);
+
+    // Verify extension-host mapping into 0-based `vscode.DiagnosticSeverity.Warning` (`1`, never `Error` `0`):
+    setWorkspaceTrusted(true);
+    setWorkspaceFolders([workspaceDir]);
+    setWorkspaceConfig({ executablePath: getLiveBinaryPath(), 'lsp.enable': true });
+    const openedDoc = openMockDocument({ fsPath: mainPath, text: lintFixture });
+
+    activate(createMockExtensionContext());
+    await waitUntil(
+      () => (getMockState().collections[0]?.get(openedDoc.uri)?.length ?? 0) >= 5,
+      'mapped VS Code Warning diagnostics in DiagnosticCollection'
+    );
+
+    const mappedDiags = getMockState().collections[0]?.get(openedDoc.uri) ?? [];
+    for (const mappedDiag of mappedDiags) {
+      expect(mappedDiag.severity).toBe(DiagnosticSeverity.Warning);
+      expect(mappedDiag.severity).not.toBe(DiagnosticSeverity.Error);
+    }
+    expect(findMockDiagByCode(mappedDiags, 'W0203/single-char-ident')).toBeDefined();
+    expect(findMockDiagByCode(mappedDiags, 'W0122/ungrouped-numeric-literal')).toBeDefined();
+    expect(findMockDiagByCode(mappedDiags, 'W0123/non-upper-hex-literal')).toBeDefined();
+    expect(findMockDiagByCode(mappedDiags, 'W0402/unused-binding')?.tags).toEqual([
+      DiagnosticTag.Unnecessary,
+    ]);
+    expect(findMockDiagByCode(mappedDiags, 'W0404/unused-import')?.tags).toEqual([
+      DiagnosticTag.Unnecessary,
+    ]);
+  }, 20_000);
+
+  it('serves Quick Fix code actions with isPreferred gating, (unsafe fix) labels, and @expect suppression', async () => {
+    const workspaceDir = await makeTempWorkspace();
+    const fixesPath = path.join(workspaceDir, 'src', 'main.cx');
+    const initialFixesCx = [
+      'pub fn verify_quick_fixes() -> u32 {',
+      '    let big_dec = 100000_u32;',
+      '    let low_hex = 0xdead_beef_u32;',
+      '    let unused_slot = 7_u32;',
+      '    let lookalike_txt = "\u0421ache";',
+      '    _ = lookalike_txt;',
+      '    big_dec ^ low_hex',
+      '}',
+      '',
+    ].join('\n');
+    await writeFile(fixesPath, initialFixesCx, 'utf8');
+
+    setWorkspaceTrusted(true);
+    setWorkspaceFolders([workspaceDir]);
+    setWorkspaceConfig({ executablePath: getLiveBinaryPath(), 'lsp.enable': true });
+    const fixesDoc = openMockDocument({ fsPath: fixesPath, text: initialFixesCx });
+
+    activate(createMockExtensionContext());
+    await waitUntil(
+      () => (getMockState().collections[0]?.get(fixesDoc.uri)?.length ?? 0) >= 4,
+      'initial Quick Fix candidate diagnostics'
+    );
+
+    const codeActionsProvider = getMockState().providers
+      .codeActions[0] as CodeActionsProviderHandle;
+    const { token } = createMockCancelToken();
+    const actions = await codeActionsProvider.provideCodeActions(
+      fixesDoc,
+      new Range(0, 0, 8, 0),
+      { diagnostics: [] },
+      token
+    );
+    expect(actions).not.toBeNull();
+    if (actions === null) {
+      throw new Error('Expected Quick Fix actions array.');
+    }
+
+    // [1] `MachineApplicable` (`isPreferred: true`) vs. `MaybeIncorrect` (`isPreferred: false`, `(unsafe fix)`):
+    assertPrimaryQuickFix(
+      actions,
+      fixesDoc.uri,
+      'digit-group separators',
+      true,
+      'W0122/ungrouped-numeric-literal',
+      '100_000'
+    );
+    assertPrimaryQuickFix(
+      actions,
+      fixesDoc.uri,
+      'normalize hexadecimal literal',
+      true,
+      'W0123/non-upper-hex-literal',
+      '0xDEAD_BEEF'
+    );
+    assertPrimaryQuickFix(
+      actions,
+      fixesDoc.uri,
+      'prefix the unused binding',
+      false,
+      'W0402/unused-binding',
+      '_unused_slot'
+    );
+    assertPrimaryQuickFix(
+      actions,
+      fixesDoc.uri,
+      'ambiguous Unicode character',
+      false,
+      'W0104/ambiguous-unicode-text',
+      'C'
+    );
+
+    // [2] Secondary `@expect` suppression actions carry `isPreferred: false` for all four rules:
+    for (const slug of [
+      'ungrouped-numeric-literal',
+      'non-upper-hex-literal',
+      'unused-binding',
+      'ambiguous-unicode-text',
+    ]) {
+      const suppressAction = findActionByTitle(actions, `Suppress \`${slug}\` with \`@expect\``);
+      expect(suppressAction).toBeDefined();
+      if (suppressAction !== undefined) {
+        expect(suppressAction.isPreferred).toBe(false);
+        expect((suppressAction.edit?.get(fixesDoc.uri).length ?? 0) > 0).toBe(true);
+      }
+    }
+
+    // [3] Verify in-code `@expect` suppresses fulfilled rules while `W0002` flags unfulfilled selectors:
+    changeMockDocument(
+      fixesDoc,
+      [
+        '@expect(single-char-ident, non-upper-hex-literal, reason: "RFC wire mask")',
+        'pub fn verify_quick_fixes() -> u32 {',
+        '    let c = 0xDEAD_BEEF_u32;',
+        '    c ^ (c >> 16_u32)',
+        '}',
+        '',
+      ].join('\n')
+    );
+    await waitUntil(() => {
+      const currentDiags = getMockState().collections[0]?.get(fixesDoc.uri) ?? [];
+      return currentDiags.length === 1 && currentDiags[0]?.code === 'W0002/unused-suppression';
+    }, 'W0002 unused-suppression on unfulfilled non-upper-hex-literal selector');
+
+    const [staleCollection] = getMockState().collections;
+    const staleDiag = staleCollection?.get(fixesDoc.uri)?.[0];
+    expect(staleDiag).toMatchObject({
+      severity: DiagnosticSeverity.Warning,
+      tags: [DiagnosticTag.Unnecessary],
+    });
+
+    const pruneActions = await codeActionsProvider.provideCodeActions(
+      fixesDoc,
+      new Range(0, 0, 1, 0),
+      { diagnostics: [] },
+      token
+    );
+    expect(pruneActions?.[0]?.isPreferred).toBe(true);
+
+    changeMockDocument(
+      fixesDoc,
+      [
+        '@expect(single-char-ident, reason: "RFC wire mask")',
+        'pub fn verify_quick_fixes() -> u32 {',
+        '    let c = 0xDEAD_BEEF_u32;',
+        '    c ^ (c >> 16_u32)',
+        '}',
+        '',
+      ].join('\n')
+    );
+    await waitUntil(
+      () => (staleCollection?.get(fixesDoc.uri)?.length ?? -1) === 0,
+      'zero diagnostics once @expect matches active rule set'
+    );
+  }, 20_000);
+
+  it('survives LF & CRLF ranged mid-function break/restore edits and serves < 2 ms warm lint turnaround', async () => {
+    const workspaceDir = await makeTempWorkspace();
+    const protocolErrors: string[] = [];
+    const pushedByUri = new Map<string, LspPublishDiagnosticsParams[]>();
+    let pendingBenchDiagResolver: ((params: LspPublishDiagnosticsParams) => void) | undefined =
+      undefined;
+    let benchTargetUri = '';
+
+    const session = await startLspClient({
+      binaryPath: getLiveBinaryPath(),
+      cwd: workspaceDir,
+      onProtocolError: (summary) => {
+        protocolErrors.push(summary);
+      },
+      onPublishDiagnostics: (params) => {
+        const normUri = Uri.parse(params.uri).toString();
+        const history = pushedByUri.get(normUri) ?? [];
+        history.push(params);
+        pushedByUri.set(normUri, history);
+        if (normUri === benchTargetUri && pendingBenchDiagResolver !== undefined) {
+          const resolver = pendingBenchDiagResolver;
+          pendingBenchDiagResolver = undefined;
+          resolver(params);
+        }
+      },
+      workspaceFolders: [{ name: 'lsp-verify', uri: Uri.file(workspaceDir).toString() }],
+    });
+    spawnedClients.push(session);
+
+    // [1] Ranged mid-function break-and-restore resilience across both `LF` (`\n`) and `CRLF` (`\r\n`):
+    for (const [variantLabel, eolSeq] of [
+      ['lf', '\n'],
+      ['crlf', '\r\n'],
+    ] as const) {
+      const filePath = path.join(workspaceDir, 'src', `ranged_${variantLabel}.cx`);
+      const cleanSource = [
+        'pub fn helper_calc(val_in: i32) -> i32 {',
+        '    val_in * 2_i32',
+        '}',
+        '',
+        'pub fn compute_pipeline(seed_val: i32) -> i32 {',
+        '    let step_val = helper_calc(seed_val);',
+        '    step_val + 10_i32',
+        '}',
+        '',
+      ].join(eolSeq);
+      await writeFile(filePath, cleanSource, 'utf8');
+      const docUri = Uri.file(filePath).toString();
+
+      notifyTextDocument(session, 'didOpen', docUri, {
+        languageId: 'corex',
+        text: cleanSource,
+        version: 1,
+      });
+      await waitUntil(
+        () => hasCleanDiagnosticsAtVersion(pushedByUri.get(docUri) ?? [], 1),
+        `initial clean ${variantLabel} diagnostics`
+      );
+
+      const initialTokens = await requestTextDocument(
+        session,
+        'semanticTokens/full',
+        docUri,
+        {},
+        isSemanticTokensPayload
+      );
+      expect((initialTokens?.data.length ?? 0) > 20).toBe(true);
+
+      const tailExprRange = findSubstringRange(cleanSource, 'step_val + 10_i32');
+      const callPos = findAnchoredPosition(cleanSource, 'let step_val =', 'helper_calc');
+
+      // Step A: Ranged mid-function syntax break (`step_val + 10_i32` -> `step_val +`):
+      notifyTextDocument(session, 'didChange', docUri, {
+        contentChanges: [
+          {
+            range: {
+              end: { character: tailExprRange.end.character, line: tailExprRange.end.line },
+              start: { character: tailExprRange.start.character, line: tailExprRange.start.line },
+            },
+            text: 'step_val +',
+          },
+        ],
+        textDocument: { version: 2 },
+      });
+      await waitUntil(
+        () =>
+          (pushedByUri.get(docUri)?.at(-1)?.version ?? 0) >= 2 &&
+          (pushedByUri.get(docUri)?.at(-1)?.diagnostics.length ?? 0) > 0,
+        `syntax-error diagnostics on ${variantLabel} ranged didChange v2`
+      );
+      expect(pushedByUri.get(docUri)?.at(-1)?.diagnostics[0]?.severity).toBe(1);
+
+      const [brokenHover, brokenDef, brokenSem] = await Promise.all([
+        requestTextDocument(session, 'hover', docUri, { position: callPos }, isHoverPayload),
+        session.request('textDocument/definition', {
+          position: callPos,
+          textDocument: { uri: docUri },
+        }),
+        requestTextDocument(session, 'semanticTokens/full', docUri, {}, isSemanticTokensPayload),
+      ]);
+      expect(brokenHover).not.toBeNull();
+      expect(brokenDef).not.toBeNull();
+      expect((brokenSem?.data.length ?? 0) > 20).toBe(true);
+
+      // Step B: Ranged mid-function type break (`step_val +` -> `step_val + "wrong_ret_type"`):
+      const typeBreakExpr = 'step_val + "wrong_ret_type"';
+      notifyTextDocument(session, 'didChange', docUri, {
+        contentChanges: [
+          {
+            range: {
+              end: {
+                character: tailExprRange.start.character + 'step_val +'.length,
+                line: tailExprRange.start.line,
+              },
+              start: { character: tailExprRange.start.character, line: tailExprRange.start.line },
+            },
+            text: typeBreakExpr,
+          },
+        ],
+        textDocument: { version: 3 },
+      });
+      await waitUntil(
+        () => hasErrorDiagnosticsAtVersion(pushedByUri.get(docUri) ?? [], 3),
+        `type-error diagnostics on ${variantLabel} ranged didChange v3`
+      );
+      const [typeErrHover, typeErrDef, typeErrSem] = await Promise.all([
+        requestTextDocument(session, 'hover', docUri, { position: callPos }, isHoverPayload),
+        session.request('textDocument/definition', {
+          position: callPos,
+          textDocument: { uri: docUri },
+        }),
+        requestTextDocument(session, 'semanticTokens/full', docUri, {}, isSemanticTokensPayload),
+      ]);
+      expect(typeErrHover).not.toBeNull();
+      expect(typeErrDef).not.toBeNull();
+      expect((typeErrSem?.data.length ?? 0) > 20).toBe(true);
+
+      // Step C: Ranged mid-function restore (`step_val + "wrong_ret_type"` -> `step_val + 10_i32`) back to 0 diagnostics:
+      notifyTextDocument(session, 'didChange', docUri, {
+        contentChanges: [
+          {
+            range: {
+              end: {
+                character: tailExprRange.start.character + typeBreakExpr.length,
+                line: tailExprRange.start.line,
+              },
+              start: { character: tailExprRange.start.character, line: tailExprRange.start.line },
+            },
+            text: 'step_val + 10_i32',
+          },
+        ],
+        textDocument: { version: 4 },
+      });
+      await waitUntil(
+        () => hasCleanDiagnosticsAtVersion(pushedByUri.get(docUri) ?? [], 4),
+        `restored 0 diagnostics on ${variantLabel} ranged didChange v4`
+      );
+    }
+
+    // [2] Measure `< 2 ms` warm incremental lint turnaround over ranged single-char `didChange` edits:
+    const benchPath = path.join(workspaceDir, 'src', 'warm_lint.cx');
+    const benchSource = [
+      'pub fn mask_word(word_in: u32) -> u32 {',
+      '    let mask_val = 0xDEAD_BEEF_u32;',
+      '    word_in ^ mask_val',
+      '}',
+      '',
+    ].join('\n');
+    await writeFile(benchPath, benchSource, 'utf8');
+    benchTargetUri = Uri.file(benchPath).toString();
+    const beefSpan = findSubstringRange(benchSource, 'BEEF');
+    const singleCharRange = {
+      end: { character: beefSpan.end.character, line: beefSpan.end.line },
+      start: { character: beefSpan.end.character - 1, line: beefSpan.end.line },
+    };
+
+    notifyTextDocument(session, 'didOpen', benchTargetUri, {
+      languageId: 'corex',
+      text: benchSource,
+      version: 1,
+    });
+    await waitUntil(
+      () => hasCleanDiagnosticsAtVersion(pushedByUri.get(benchTargetUri) ?? [], 1),
+      'warm_lint initial clean didOpen'
+    );
+
+    function setBenchResolver(
+      nextCb: ((params: LspPublishDiagnosticsParams) => void) | undefined
+    ): void {
+      pendingBenchDiagResolver = nextCb;
+    }
+    for (let i = 0; i < 4; i += 1) {
+      const isLowerHex = i % 2 === 0;
+      const nextVer = 2 + i;
+      const pushWait = waitNextBenchDiagnostic(setBenchResolver, nextVer);
+      notifyTextDocument(session, 'didChange', benchTargetUri, {
+        contentChanges: [{ range: singleCharRange, text: isLowerHex ? 'f' : 'F' }],
+        textDocument: { version: nextVer },
+      });
+      const diagBatch = await pushWait;
+      expect(diagBatch.diagnostics).toHaveLength(isLowerHex ? 1 : 0);
+    }
+
+    // Coalesced 12-edit ranged burst (`v6..v17`) + warm `previousResultId` diagnostic pull (`< 2 ms`):
+    const burstWait = waitNextBenchDiagnostic(setBenchResolver, 17);
+    const burstStart = performance.now();
+    for (let i = 0; i < 12; i += 1) {
+      notifyTextDocument(session, 'didChange', benchTargetUri, {
+        contentChanges: [{ range: singleCharRange, text: i % 2 === 0 ? 'f' : 'F' }],
+        textDocument: { version: 6 + i },
+      });
+    }
+    const burstDiag = await burstWait;
+    expect((performance.now() - burstStart) / 12).toBeLessThan(2);
+    expect(burstDiag.diagnostics).toHaveLength(0);
+
+    const seedPull = await requestTextDocument(
+      session,
+      'diagnostic',
+      benchTargetUri,
+      {},
+      isDiagnosticReport
+    );
+    expect(seedPull?.kind).toBe('full');
+    let bestWarmPullElapsed = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < 6; i += 1) {
+      const pullStart = performance.now();
+      const pullRes = await requestTextDocument(
+        session,
+        'diagnostic',
+        benchTargetUri,
+        { previousResultId: seedPull?.resultId },
+        isDiagnosticReport
+      );
+      bestWarmPullElapsed = Math.min(bestWarmPullElapsed, performance.now() - pullStart);
+      expect(pullRes?.kind).toBe('unchanged');
+    }
+    expect(bestWarmPullElapsed).toBeLessThan(2);
+    expect(protocolErrors).toEqual([]);
+    await stopLspClient(session);
+  }, 25_000);
+
+  it('reloads corex.toml [lint].disable live via FileSystemWatcher and updates open .cx diagnostics', async () => {
+    const workspaceDir = await makeTempWorkspace();
+    const tomlPath = path.join(workspaceDir, 'corex.toml');
+    const reloadMainPath = path.join(workspaceDir, 'src', 'main.cx');
+    const reloadMainSource = [
+      'pub fn config_probe() -> u32 {',
+      '    let c = 0xdead_beef_u32;',
+      '    c ^ (c >> 16_u32)',
+      '}',
+      '',
+    ].join('\n');
+    await writeFile(reloadMainPath, reloadMainSource, 'utf8');
+
+    setWorkspaceTrusted(true);
+    setWorkspaceFolders([workspaceDir]);
+    setWorkspaceConfig({ executablePath: getLiveBinaryPath(), 'lsp.enable': true });
+    const reloadDoc = openMockDocument({ fsPath: reloadMainPath, text: reloadMainSource });
+
+    activate(createMockExtensionContext());
+    await waitUntil(
+      () => (getMockState().collections[0]?.get(reloadDoc.uri)?.length ?? 0) === 2,
+      'initial W0203 + W0123 warnings before corex.toml disable reload'
+    );
+
+    const [watcher] = getMockState().watchers;
+    expect(watcher).toBeDefined();
+    const tomlUri = Uri.file(tomlPath);
+
+    await writeFile(
+      tomlPath,
+      [
+        '[package]',
+        'name = "lsp-verify"',
+        'version = "0.1.0"',
+        'edition = "2026"',
+        '',
+        '[lint]',
+        'disable = ["single-char-ident"]',
+        '',
+      ].join('\n'),
+      'utf8'
+    );
+    watcher?.fireChange(tomlUri);
+    await waitUntil(() => {
+      const activeDiags = getMockState().collections[0]?.get(reloadDoc.uri) ?? [];
+      return activeDiags.length === 1 && activeDiags[0]?.code === 'W0123/non-upper-hex-literal';
+    }, 'warm corex.toml reload disabling single-char-ident');
+
+    await writeFile(
+      tomlPath,
+      [
+        '[package]',
+        'name = "lsp-verify"',
+        'version = "0.1.0"',
+        'edition = "2026"',
+        '',
+        '[lint]',
+        'disable = ["W0203", "non-upper-hex-literal"]',
+        '',
+      ].join('\n'),
+      'utf8'
+    );
+    watcher?.fireChange(tomlUri);
+    await waitUntil(
+      () => (getMockState().collections[0]?.get(reloadDoc.uri)?.length ?? -1) === 0,
+      'warm corex.toml reload disabling both W0203 and non-upper-hex-literal'
+    );
+  }, 25_000);
 });
