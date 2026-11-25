@@ -207,6 +207,9 @@ const BINARY_NOT_FOUND_MSG = 'Binary not found.';
 /** Shared `'SemanticTokens'` provider suffix. */
 const SEM_TOKENS = 'SemanticTokens';
 
+/** Shared three-per-em-padded middle-dot separator (`U+2004 U+00B7 U+2004`). */
+const DOT_SEP = ' · ';
+
 // ----------------------------------- REGEX PATTERNS ------------------------------------
 
 /** Matches workspace-relative paths inside ignored build, VCS, or dependency directories. */
@@ -503,21 +506,15 @@ function setStatus(icon: StatusIcon, summary: string): void {
   const [client, lspStatus, fmtStatus, hintsStatus, toggleLabel] = describeServices(summary);
   const tooltip = assignProps(
     new VsMarkdown(
-      `**CoreX** – ${summary}
-
-$(${client ? 'check' : icon}) **${LSP_SERVICE_LABEL}:** ${lspStatus}
-
-$(${fmtStatus === DISABLED_TEXT ? 'circle-slash' : 'check'}) **${FMT_SERVICE_LABEL}:** ${fmtStatus}
-
-${mapList(
-  [
-    ['Output', SUB_OUTPUT],
-    [RESTART_LABEL, SUB_RESTART],
-    [toggleLabel, client ? SUB_STOP : SUB_RESTART],
-    [`${INLAY_HINTS_LABEL}: ${hintsStatus}`, SUB_HINTS],
-  ] as const,
-  ([label, subCmd]) => `[${label}](command:${formatCorexId(subCmd)}) · `
-).join('')}[${SETTINGS_LABEL}](command:${CMD_OPEN_SETTINGS}?%22${COREX_CONFIG_SECTION}%22)`,
+      `**CoreX**${DOT_SEP}${summary}\n\n$(${client ? 'check' : icon}) **${LSP_SERVICE_LABEL}:** ${lspStatus}  \n$(${fmtStatus === DISABLED_TEXT ? 'circle-slash' : 'check'}) **${FMT_SERVICE_LABEL}:** ${fmtStatus}\n\n${mapList(
+        [
+          ['Output', SUB_OUTPUT],
+          [RESTART_LABEL, SUB_RESTART],
+          [toggleLabel, client ? SUB_STOP : SUB_RESTART],
+          [`${INLAY_HINTS_LABEL}: ${hintsStatus}`, SUB_HINTS],
+        ] as const,
+        ([label, subCmd]) => `[${label}](command:${formatCorexId(subCmd)})${DOT_SEP}`
+      ).join('')}[${SETTINGS_LABEL}](command:${CMD_OPEN_SETTINGS}?%22${COREX_CONFIG_SECTION}%22)`,
       true
     ),
     { isTrusted: true }

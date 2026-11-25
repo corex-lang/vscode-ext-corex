@@ -978,10 +978,10 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     expect(mockState.statusBarItems[0]?.text).toBe('$(warning) CoreX');
     expect(mockState.statusBarItems[0]?.command).toBe('corex.showStatusMenu');
     expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
-      '**CoreX** – Untrusted.'
+      '**CoreX** · Untrusted.'
     );
     expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
-      '**Language Server (`corex lsp`):** Untrusted'
+      '**Language Server (`corex lsp`):** Untrusted  \n$('
     );
 
     await commands.executeCommand('corex.restartServer');
@@ -1004,7 +1004,7 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     expect(mockState.providers.hover).toHaveLength(0);
     expect(mockState.providers.documentRangeFormatting).toHaveLength(0);
     expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
-      '**CoreX** – CLI fmt.'
+      '**CoreX** · CLI fmt.'
     );
     expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain('Ready (CLI)');
 
@@ -1098,7 +1098,7 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     expect(mockState.quickPicks.length).toBeGreaterThanOrEqual(1);
     expect(mockState.statusBarItems[0]?.text).toBe('$(circle-slash) CoreX');
     expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
-      '**CoreX** – Stopped.'
+      '**CoreX** · Stopped.'
     );
 
     setNextDialogChoice('Start Language Server');

@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 -   Scoped `let` and `(x := expr)` local bindings as `variable.other.readwrite.corex` so immutable local variables render with standard variable foreground colors while `const` items retain constant styling.
--   Styled `corex lsp` function contract and stack hover footers in compact `<sub>` typography with theme-adaptive semi-transparent contrast (`#00000099` in Light themes, `#ffffffa6` in Dark themes, and full contrast in High Contrast themes).
+-   Styled `corex lsp` function contract and stack hover footers in compact `<sub>` typography with theme-adaptive semi-transparent contrast (`#00000099` in Light themes, `#ffffffa6` in Dark themes, and full contrast in High Contrast themes), and unified the `CoreX` status-bar hover card onto ` · ` header separators and single-paragraph `<br>` service rows.
 
 ### Fixed
 
