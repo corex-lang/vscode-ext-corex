@@ -87,13 +87,6 @@ export interface LspClientOptions {
   readonly cwd?: string;
   /** Optional environment variable overrides for the child process. */
   readonly env?: NodeJS.ProcessEnv;
-  /**
-   * Whether to advertise `capabilities.textDocument.diagnostic` during `initialize`.
-   *
-   * Defaults to `false` so `corex lsp` keeps push `textDocument/publishDiagnostics` active
-   * while still answering explicit `textDocument/diagnostic` pull refreshes on sibling tabs.
-   */
-  readonly hasPullDiagnosticsCapability?: boolean;
   /** Whether to pass `--internal-core` to `corex lsp --stdio`. */
   readonly isInternalCore?: boolean;
   /** Invoked when the `corex lsp` child process exits. */

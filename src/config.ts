@@ -44,21 +44,11 @@ const ENABLE_KEY = 'enable';
 /** Setting key for editor inlay hints under `corex.*`. */
 export const INLAY_HINTS_KEY = `inlayHints.${ENABLE_KEY}`;
 
-/** Canonical default values matching `package.json` `contributes.configuration`. */
-export const DEFAULT_EXTENSION_CONFIG: ExtensionConfig = {
-  executablePath: '',
-  internalCore: 'auto',
-  isEnabled: true,
-  isFormatEnabled: true,
-  isInlayHintsEnabled: false,
-  isLspEnabled: true,
-  traceServer: 'off',
-};
+/** Setting key for formatter registration under `corex.*`. */
+export const FORMAT_ENABLE_KEY = `format.${ENABLE_KEY}`;
 
-/** Keys whose changes require restarting `corex lsp` (sorted alphabetically). */
-const RESTART_KEYS = splitCsv(
-  `${EXEC_PATH_KEY},internalCore,isEnabled,isLspEnabled`
-) as readonly (keyof ExtensionConfig)[];
+/** Setting key for language server activation under `corex.*`. */
+export const LSP_ENABLE_KEY = `lsp.${ENABLE_KEY}`;
 
 // -------------------------------------- INTERNALS --------------------------------------
 
@@ -78,6 +68,23 @@ function buildEnumGuard<T extends string>(csv: string): (value: unknown) => valu
   return (value): value is T => isStr(value) && validSet.has(value);
 }
 
+/**
+ * Converts a validated `ExtensionConfigTuple` into an `ExtensionConfig` record.
+ *
+ * @param tuple   Validated positional configuration tuple.
+ */
+function tupleToConfig(tuple: ExtensionConfigTuple): ExtensionConfig {
+  return {
+    executablePath: tuple[4],
+    internalCore: tuple[5],
+    isEnabled: tuple[0],
+    isFormatEnabled: tuple[2],
+    isInlayHintsEnabled: tuple[3],
+    isLspEnabled: tuple[1],
+    traceServer: tuple[6],
+  };
+}
+
 // ------------------------------------- PUBLIC API --------------------------------------
 
 /** Type guard checking whether `value` is a valid `InternalCoreMode` in $O(1)$ time. */
@@ -92,16 +99,19 @@ export const isTraceServerMode = buildEnumGuard<TraceServerMode>('messages,off,v
  * @param rawInput   Untrusted setting values keyed by logical field name.
  */
 export function parseExtensionConfig(rawInput: RawExtensionConfigInput): ExtensionConfig {
-  return {
-    executablePath: isStr(rawInput.executablePath) ? rawInput.executablePath : '',
-    internalCore: isInternalCoreMode(rawInput.internalCore) ? rawInput.internalCore : 'auto',
-    isEnabled: rawInput.enable !== false,
-    isFormatEnabled: rawInput.formatEnable !== false,
-    isInlayHintsEnabled: rawInput.inlayHintsEnable === true,
-    isLspEnabled: rawInput.lspEnable !== false,
-    traceServer: isTraceServerMode(rawInput.traceServer) ? rawInput.traceServer : 'off',
-  };
+  return tupleToConfig([
+    rawInput.enable !== false,
+    rawInput.lspEnable !== false,
+    rawInput.formatEnable !== false,
+    rawInput.inlayHintsEnable === true,
+    isStr(rawInput.executablePath) ? rawInput.executablePath : '',
+    isInternalCoreMode(rawInput.internalCore) ? rawInput.internalCore : 'auto',
+    isTraceServerMode(rawInput.traceServer) ? rawInput.traceServer : 'off',
+  ]);
 }
+
+/** Canonical default values matching `package.json` `contributes.configuration`. */
+export const DEFAULT_EXTENSION_CONFIG: ExtensionConfig = /* @__PURE__ */ parseExtensionConfig({});
 
 /** Clears the cached configuration snapshots so the next read re-queries VS Code. */
 export function invalidateConfigCache(): void {
@@ -118,14 +128,14 @@ export function getCorexWorkspaceConfig() {
 export function readCfgTuple(): ExtensionConfigTuple {
   if (!cachedTuple) {
     const configView = getCorexWorkspaceConfig();
-    const rawExec = configView.get(EXEC_PATH_KEY);
-    const rawMode = configView.get('internalCore');
-    const rawTrace = configView.get('trace.server');
+    const [rawEn, rawLsp, rawFmt, rawHints, rawExec, rawMode, rawTrace] = splitCsv(
+      `${ENABLE_KEY},${LSP_ENABLE_KEY},${FORMAT_ENABLE_KEY},${INLAY_HINTS_KEY},${EXEC_PATH_KEY},internalCore,trace.server`
+    ).map((key) => configView.get(key));
     cachedTuple = [
-      configView.get(ENABLE_KEY) !== false,
-      configView.get(`lsp.${ENABLE_KEY}`) !== false,
-      configView.get(`format.${ENABLE_KEY}`) !== false,
-      configView.get(INLAY_HINTS_KEY) === true,
+      rawEn !== false,
+      rawLsp !== false,
+      rawFmt !== false,
+      rawHints === true,
       isStr(rawExec) ? rawExec : '',
       isInternalCoreMode(rawMode) ? rawMode : 'auto',
       isTraceServerMode(rawTrace) ? rawTrace : 'off',
@@ -136,19 +146,7 @@ export function readCfgTuple(): ExtensionConfigTuple {
 
 /** Reads, validates, and caches all `corex.*` workspace configuration settings. */
 export function readExtensionConfig(): ExtensionConfig {
-  if (!cachedConfig) {
-    const tuple = readCfgTuple();
-    cachedConfig = {
-      executablePath: tuple[4],
-      internalCore: tuple[5],
-      isEnabled: tuple[0],
-      isFormatEnabled: tuple[2],
-      isInlayHintsEnabled: tuple[3],
-      isLspEnabled: tuple[1],
-      traceServer: tuple[6],
-    };
-  }
-  return cachedConfig;
+  return (cachedConfig ??= tupleToConfig(readCfgTuple()));
 }
 
 /**
@@ -161,7 +159,9 @@ export function hasServerRestartConfigChange(
   prevConfig: ExtensionConfig,
   nextConfig: ExtensionConfig
 ): boolean {
-  for (const key of RESTART_KEYS) {
+  for (const key of splitCsv(
+    `${EXEC_PATH_KEY},internalCore,isEnabled,isLspEnabled`
+  ) as readonly (keyof ExtensionConfig)[]) {
     if (prevConfig[key] !== nextConfig[key]) {
       return true;
     }

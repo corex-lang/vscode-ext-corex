@@ -944,6 +944,24 @@ describe('Standalone CLI formatter (runCorexFmtCli)', () => {
     );
     expect(formattedFromCrlf).toBe(expectedCanonical);
     expect(formattedFromCrlf?.includes('\r')).toBe(false);
+
+    expect(
+      await runCorexFmtCli(
+        binaryPath,
+        'pub fn banner() -> str {\n    let msg = "\n    line one\n      line two\n    ";\n    msg\n}\n'
+      )
+    ).toBe(
+      [
+        'pub fn banner() -> str {',
+        '    let msg = "',
+        '        line one',
+        '          line two',
+        '        ";',
+        '    msg',
+        '}',
+        '',
+      ].join('\n')
+    );
   });
 
   it('returns null cleanly on syntax-error .cx buffers and pre-canceled tokens', async () => {
@@ -976,12 +994,19 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     expect(mockState.providers.hover).toHaveLength(0);
     expect(mockState.providers.documentFormatting).toHaveLength(0);
     expect(mockState.statusBarItems[0]?.text).toBe('$(warning) CoreX');
+    expect(mockState.statusBarItems[0]?.backgroundColor).toEqual({
+      id: 'statusBarItem.warningBackground',
+    });
     expect(mockState.statusBarItems[0]?.command).toBe('corex.showStatusMenu');
-    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
-      '**CoreX** · Untrusted.'
+    const untrustedTip = readTooltipValue(mockState.statusBarItems[0]?.tooltip);
+    expect(untrustedTip).toContain(
+      '**CoreX** · Untrusted. <sub><span style="color:var(--vscode-descriptionForeground);">(ext v1.0.0)</span></sub>'
     );
-    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
-      '**Language Server (`corex lsp`):** Untrusted  \n$('
+    expect(untrustedTip).toContain(
+      '<span style="color:var(--vscode-editorWarning-foreground);">$(warning) **Language Server:** Untrusted</span>'
+    );
+    expect(untrustedTip).toContain(
+      '<span style="color:var(--vscode-editorWarning-foreground);">$(warning) **Formatter:** Untrusted</span>'
     );
 
     await commands.executeCommand('corex.restartServer');
@@ -1003,10 +1028,14 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     const mockState = getMockState();
     expect(mockState.providers.hover).toHaveLength(0);
     expect(mockState.providers.documentRangeFormatting).toHaveLength(0);
-    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
-      '**CoreX** · CLI fmt.'
+    expect(mockState.statusBarItems[0]?.text).toBe('$(check) CoreX');
+    expect(mockState.statusBarItems[0]?.backgroundColor).toBeUndefined();
+    const cliTip = readTooltipValue(mockState.statusBarItems[0]?.tooltip);
+    expect(cliTip).toContain('**CoreX** · Format only');
+    expect(cliTip).toContain(
+      '$(circle-slash) **Language Server:** Disabled • [Start](command:corex.restartServer)'
     );
-    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain('Ready (CLI)');
+    expect(cliTip).toContain('$(check) **Formatter** • [Disable](command:corex.toggleFormat)');
 
     const crlfDoc = openMockDocument({
       fsPath: path.join(EXT_ROOT, 'sample_cli.cx'),
@@ -1038,22 +1067,27 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
 
     activate(createMockExtensionContext());
     await waitUntil(
-      () => getMockState().statusBarItems[0]?.text === '$(check) CoreX',
+      () => getMockState().statusBarItems[0]?.text === '$(check-all) CoreX',
       'LSP ready status bar state'
     );
 
     const mockState = getMockState();
+    expect(mockState.commands.has('corex.fixAll')).toBe(true);
     expect(mockState.commands.has('corex.restartServer')).toBe(true);
     expect(mockState.commands.has('corex.showOutputChannel')).toBe(true);
     expect(mockState.commands.has('corex.showStatusMenu')).toBe(true);
     expect(mockState.commands.has('corex.stopServer')).toBe(true);
+    expect(mockState.commands.has('corex.toggleFormat')).toBe(true);
     expect(mockState.commands.has('corex.toggleInlayHints')).toBe(true);
-    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
-      'Language Server (`corex lsp`):'
+    const readyTip = readTooltipValue(mockState.statusBarItems[0]?.tooltip);
+    expect(readyTip).toContain(
+      '$(check) **Language Server** • [Restart](command:corex.restartServer) · [Stop](command:corex.stopServer)'
     );
-    expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
-      'Formatter (`corex fmt`):'
-    );
+    expect(readyTip).toContain('$(check) **Formatter** • [Disable](command:corex.toggleFormat)');
+    expect(readyTip).not.toContain('corex lsp');
+    expect(readyTip).not.toContain('corex fmt');
+    expect(readyTip).not.toContain('--internal-core');
+    expect(readyTip).not.toContain('PID');
     expect(mockState.providers.hover).toHaveLength(1);
     expect(mockState.providers.definition).toHaveLength(1);
     expect(mockState.providers.completion).toHaveLength(1);
@@ -1092,19 +1126,42 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     await commands.executeCommand('corex.showOutputChannel');
     expect(mockState.outputChannels[0]?.isShown).toBe(true);
 
-    // Exercise status-bar QuickPick menu: Stop Language Server -> Start Language Server -> Toggle Inlay Hints:
-    setNextDialogChoice('Stop Language Server');
+    // Exercise status-bar QuickPick menu: Open Project Config -> Disable Formatter -> Stop -> Start -> Enable:
+    setNextDialogChoice('Open Project Config');
     await commands.executeCommand('corex.showStatusMenu');
     expect(mockState.quickPicks.length).toBeGreaterThanOrEqual(1);
+    const menuItems = mockState.quickPicks[0] as readonly {
+      readonly description?: string;
+      readonly kind?: number;
+      readonly label: string;
+    }[];
+    for (const entry of menuItems) {
+      expect(entry.label.includes('`')).toBe(false);
+    }
+    expect(menuItems[0]?.label).toBe('Actions');
+    expect(menuItems[1]?.label).toBe('$(wand) Format Document');
+    expect(
+      menuItems.find((entry) => entry.label.includes('Open Project Config'))?.description
+    ).toBe('corex.toml');
+    expect(mockState.executedCommands.some((call) => call.command === 'vscode.open')).toBe(true);
+
+    await commands.executeCommand('corex.toggleFormat');
+    expect(mockState.statusBarItems[0]?.text).toBe('$(check) CoreX');
+
+    setNextDialogChoice('Stop Language Server');
+    await commands.executeCommand('corex.showStatusMenu');
     expect(mockState.statusBarItems[0]?.text).toBe('$(circle-slash) CoreX');
     expect(readTooltipValue(mockState.statusBarItems[0]?.tooltip)).toContain(
       '**CoreX** · Stopped.'
     );
 
+    await commands.executeCommand('corex.toggleFormat');
+    expect(mockState.statusBarItems[0]?.text).toBe('$(check) CoreX');
+
     setNextDialogChoice('Start Language Server');
     await commands.executeCommand('corex.showStatusMenu');
     await waitUntil(
-      () => getMockState().statusBarItems[0]?.text === '$(check) CoreX',
+      () => getMockState().statusBarItems[0]?.text === '$(check-all) CoreX',
       'LSP restarted from status menu'
     );
 
@@ -1201,7 +1258,7 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
 
     activate(createMockExtensionContext());
     await waitUntil(
-      () => getMockState().statusBarItems[0]?.text === '$(check) CoreX',
+      () => getMockState().statusBarItems[0]?.text === '$(check-all) CoreX',
       'nested /build/ workspace LSP ready'
     );
 
@@ -1244,18 +1301,22 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
 
     const multilineCxText = [
       'pub fn build_query() {', // 0
-      '    let sql = "', // 1 (opens plain multiline)
-      '    SELECT id', // 2 (len >= 4 -> guide at col 4)
+      '    let sql = "', // 1 (opens plain multiline with preserved indentation)
+      '    SELECT', // 2 (flush header in indented block -> connected guide at col 4)
       '', // 3 (len 0 < 4 -> skipped)
-      '    FROM accounts', // 4 (len >= 4 -> guide at col 4)
+      '        id', // 4 (extra space at col 4 -> triggers connected block guide at col 4)
       '    ";', // 5 (closes at colC = 4)
-      '    let fmt_msg = f#"', // 6 (opens f#" multiline)
-      '      row: {id}', // 7 (len >= 6 -> guide at col 6)
+      '    let fmt_msg = f#"', // 6 (opens f#" multiline with preserved space at col 6)
+      '       row: {id}', // 7 (space at col 6 -> guide at col 6)
       '      "#;', // 8 (closes at colC = 6)
-      '    let col_zero = "', // 9 (opens plain multiline)
-      'no_margin', // 10
-      '";', // 11 (closes at colC = 0 -> no strip guide)
-      '}', // 12
+      '    let flush_block = "', // 9 (opens flush multiline with 0 preserved spaces)
+      '    flush_line_one', // 10 (no space at col 4 -> NO guide!)
+      '    flush_line_two', // 11
+      '    ";', // 12 (closes at colC = 4)
+      '    let col_zero = "', // 13 (opens plain multiline)
+      'no_margin', // 14
+      '";', // 15 (closes at colC = 0 -> no strip guide)
+      '}', // 16
     ].join('\n');
 
     const cxDoc = openMockDocument({
@@ -1271,8 +1332,8 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
 
     const [stripDeco, mutedDeco] = getMockState().decorationTypes;
     expect(stripDeco?.options.borderWidth).toBe('0 0 0 1px');
-    expect(stripDeco?.options.borderStyle).toBe('solid');
-    expect(stripDeco?.options.borderColor).toEqual({ id: 'editorIndentGuide.activeBackground1' });
+    expect(stripDeco?.options.borderStyle).toBe('dotted');
+    expect(stripDeco?.options.borderColor).toEqual({ id: 'editorIndentGuide.background1' });
     expect(mutedDeco?.options.opacity).toBe('0.58');
 
     if (stripDeco === undefined || mutedDeco === undefined) {
@@ -1307,7 +1368,7 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
         '    let nested_brace = f"{Pt { x: 1, label: "}" }} _not_dimmed"', // 6: nested `{…}` at EOL -> NOT multiline
         '    let _dim_after_nested = 3;', // 7: `_dim_after_nested` at [8, 25)
         '    let ok_multi = "', // 8: opens genuine multiline string at EOL
-        '    margin_body', // 9: strip guide at col 4
+        '      margin_body', // 9: preserved indent past col 4 -> strip guide at col 4
         '    ";', // 10: closes at colC = 4
         '}', // 11
       ].join('\n')
@@ -1478,7 +1539,7 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
 
     activate(createMockExtensionContext());
     await waitUntil(
-      () => getMockState().statusBarItems[0]?.text === '$(check) CoreX',
+      () => getMockState().statusBarItems[0]?.text === '$(check-all) CoreX',
       'LSP ready on COREX_ROOT with 4 dense stdlib tabs'
     );
 
@@ -1570,7 +1631,7 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
 
     activate(createMockExtensionContext());
     await waitUntil(
-      () => getMockState().statusBarItems[0]?.text === '$(check) CoreX',
+      () => getMockState().statusBarItems[0]?.text === '$(check-all) CoreX',
       'LSP ready for hover contract footer & operator suppression test'
     );
 
@@ -1584,21 +1645,23 @@ describe('Extension host lifecycle (src/extension.ts via vscode mock)', () => {
     // Operator token `+%` returns `null` hover:
     expect(await hoverProvider.provideHover(mainDoc, opPos, token)).toBeNull();
 
-    // Dark theme (`kind = 2`) wraps contract footer in `<sub><span style="color:#ffffffa6;">…<br>…</span></sub>` without `(verified)`:
+    // Dark theme (`kind = 2`) wraps contract footer in `var(--vscode-descriptionForeground)` without `(verified)`:
     setActiveColorThemeKind(2);
     const darkHover = await hoverProvider.provideHover(mainDoc, fnPos, token);
     const darkMd = darkHover?.contents as MockMarkdownString | undefined;
     expect(darkMd?.supportHtml).toBe(true);
     expect(darkMd?.isTrusted).toBeUndefined();
     expect(darkMd?.value).not.toContain('(verified)');
-    expect(darkMd?.value).toContain('<sub><span style="color:#ffffffa6;">✓ `@no_alloc`');
+    expect(darkMd?.value).toContain(
+      '<sub><span style="color:var(--vscode-descriptionForeground);">✓ `@no_alloc`'
+    );
     expect(darkMd?.value).toContain('<br>**stack:**');
 
-    // Light theme (`kind = 1`) uses `#00000099`:
+    // Light theme (`kind = 1`) uses the same native `var(--vscode-descriptionForeground)` token:
     setActiveColorThemeKind(1);
     const lightHover = await hoverProvider.provideHover(mainDoc, fnPos, token);
     expect((lightHover?.contents as MockMarkdownString | undefined)?.value).toContain(
-      '<sub><span style="color:#00000099;">✓ `@no_alloc`'
+      '<sub><span style="color:var(--vscode-descriptionForeground);">✓ `@no_alloc`'
     );
 
     // High Contrast (`kind = 3`) uses `<sub>…</sub>` with zero color override:
@@ -1799,6 +1862,14 @@ describe('Headless corex lsp DR-25 linter diagnostics, Quick Fix code actions, a
         expect((suppressAction.edit?.get(fixesDoc.uri).length ?? 0) > 0).toBe(true);
       }
     }
+
+    // [2.5] `corex.fixAll` applies strictly `isPreferred` (`MachineApplicable`) fixes and skips unsafe fixes:
+    openMockTextEditor(fixesDoc);
+    expect(await commands.executeCommand('corex.fixAll')).toBe(true);
+    expect(fixesDoc.getText()).toContain('let big_dec = 100_000_u32;');
+    expect(fixesDoc.getText()).toContain('let low_hex = 0xDEAD_BEEF_u32;');
+    expect(fixesDoc.getText()).toContain('let unused_slot = 7_u32;');
+    expect(fixesDoc.getText()).toContain('"\u0421ache"');
 
     // [3] Verify in-code `@expect` suppresses fulfilled rules while `W0002` flags unfulfilled selectors:
     changeMockDocument(

@@ -397,14 +397,6 @@
         }
       ]
     },
-    "comment-escapes": {
-      "patterns": [
-        {
-          "name": "constant.character.escape.comment.corex",
-          "match": "\\\\(?:x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f_]{1,6}\\}|[ntr0\\\\'\"])"
-        }
-      ]
-    },
     "comment-inline-formatting": {
       "patterns": [
         {
@@ -416,8 +408,7 @@
           "end": "(``)",
           "endCaptures": {
             "1": { "name": "punctuation.definition.comment.corex" }
-          },
-          "patterns": [{ "include": "#comment-escapes" }]
+          }
         },
         {
           "begin": "(?<!`)(`)(?!`)(?=(?>[^`\\r\\n]+)`(?!`))",
@@ -428,8 +419,7 @@
           "end": "(`)",
           "endCaptures": {
             "1": { "name": "punctuation.definition.comment.corex" }
-          },
-          "patterns": [{ "include": "#comment-escapes" }]
+          }
         },
         {
           "match": "(\\[)((?>[^\\]\\r\\n]+))(\\]\\()((?>[^\\)\\s\\r\\n]+))(\\))",
@@ -456,10 +446,9 @@
             "1": { "name": "punctuation.definition.comment.corex" }
           },
           "patterns": [
-            { "include": "#comment-escapes" },
             {
               "name": "markup.italic.markdown.corex",
-              "match": "(?>[^\\\\\\*\\r\\n]+|\\*(?!\\*\\*))+"
+              "match": "(?>[^\\*\\r\\n]+|\\*(?!\\*\\*))+"
             }
           ]
         },
@@ -490,10 +479,9 @@
             "1": { "name": "punctuation.definition.comment.corex" }
           },
           "patterns": [
-            { "include": "#comment-escapes" },
             {
               "name": "markup.italic.markdown.corex",
-              "match": "(?>[^\\\\_\\r\\n]+|_(?!__))+"
+              "match": "(?>[^_\\r\\n]+|_(?!__))+"
             }
           ]
         },
@@ -520,8 +508,7 @@
             "2": { "name": "markup.strikethrough.markdown.corex" },
             "3": { "name": "punctuation.definition.comment.corex" }
           }
-        },
-        { "include": "#comment-escapes" }
+        }
       ]
     },
     "doc-markdown": {
@@ -565,7 +552,7 @@
         { "include": "#comment-inline-formatting" },
         {
           "name": "constant.character.escape.markdown.corex",
-          "match": "\\\\[\\`*_{}\\[\\]()#+\\-.!|~]"
+          "match": "\\\\(?:[\\\\`*_{}\\[\\]()#+\\-.!|~]|$)"
         }
       ]
     },
@@ -694,7 +681,7 @@
           "name": "string.quoted.byte.raw.corex",
           "begin": "\\b(br)(#*+)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "punctuation.definition.string.begin.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -709,7 +696,7 @@
           "name": "string.quoted.byte.raw.corex",
           "begin": "\\b(br)(#*+)(\")",
           "beginCaptures": {
-            "1": { "name": "punctuation.definition.string.begin.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -724,7 +711,7 @@
           "name": "string.quoted.other.raw.corex",
           "begin": "\\b(r)(#*+)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "punctuation.definition.string.begin.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -739,7 +726,7 @@
           "name": "string.quoted.other.raw.corex",
           "begin": "\\b(r)(#*+)(\")",
           "beginCaptures": {
-            "1": { "name": "punctuation.definition.string.begin.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -754,7 +741,7 @@
           "name": "string.quoted.byte.double.corex",
           "begin": "\\b(b)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "punctuation.definition.string.begin.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" }
           },
           "end": "(\")",
@@ -768,7 +755,7 @@
           "name": "string.quoted.byte.double.corex",
           "begin": "\\b(b)(\")",
           "beginCaptures": {
-            "1": { "name": "punctuation.definition.string.begin.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" }
           },
           "end": "(\")|(?=$)",
@@ -782,12 +769,12 @@
           "name": "string.quoted.single.byte.corex",
           "begin": "\\b(b)(')",
           "beginCaptures": {
-            "1": { "name": "punctuation.definition.char.begin.corex" },
-            "2": { "name": "punctuation.definition.char.begin.corex" }
+            "1": { "name": "keyword.operator.prefix.string.corex" },
+            "2": { "name": "punctuation.definition.string.begin.corex" }
           },
           "end": "(')|(?=$)",
           "endCaptures": {
-            "1": { "name": "punctuation.definition.char.end.corex" }
+            "1": { "name": "punctuation.definition.string.end.corex" }
           },
           "patterns": [{ "include": "#byte-escapes" }]
         },
@@ -796,11 +783,11 @@
           "name": "string.quoted.single.char.corex",
           "begin": "'",
           "beginCaptures": {
-            "0": { "name": "punctuation.definition.char.begin.corex" }
+            "0": { "name": "punctuation.definition.string.begin.corex" }
           },
           "end": "(')|(?=$)",
           "endCaptures": {
-            "1": { "name": "punctuation.definition.char.end.corex" }
+            "1": { "name": "punctuation.definition.string.end.corex" }
           },
           "patterns": [{ "include": "#char-escapes" }]
         },
@@ -810,7 +797,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" }
           },
           "end": "(\")",
@@ -827,7 +814,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(\")",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" }
           },
           "end": "(\")|(?=$)",
@@ -879,7 +866,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(#{8}#++)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -897,7 +884,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(#{8}#++)(\")",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -915,7 +902,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(########)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -933,7 +920,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(########)(\")",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -951,7 +938,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(#######)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -969,7 +956,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(#######)(\")",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -987,7 +974,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(######)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -1005,7 +992,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(######)(\")",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -1023,7 +1010,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(#####)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -1041,7 +1028,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(#####)(\")",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -1059,7 +1046,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(####)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -1077,7 +1064,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(####)(\")",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -1095,7 +1082,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(###)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -1113,7 +1100,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(###)(\")",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -1131,7 +1118,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(##)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -1149,7 +1136,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(##)(\")",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -1167,7 +1154,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(#)(\")(?=$)",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },
@@ -1185,7 +1172,7 @@
           "name": "string.interpolated.corex",
           "begin": "\\b(f)(#)(\")",
           "beginCaptures": {
-            "1": { "name": "storage.type.string.corex" },
+            "1": { "name": "keyword.operator.prefix.string.corex" },
             "2": { "name": "punctuation.definition.string.begin.corex" },
             "3": { "name": "punctuation.definition.string.begin.corex" }
           },

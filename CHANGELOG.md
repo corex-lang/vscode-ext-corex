@@ -23,12 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -   Interactive Oxc-style dual-service status bar (`CoreX: Show Status Bar Menu`, `CoreX: Stop Language Server`, and `CoreX: Toggle Inlay Hints`) displaying live `corex lsp` and `corex fmt` status, trusted Markdown action links on hover, and a one-click QuickPick management menu.
 -   Non-backtracking Markdown syntax scopes inside `/#` and `/|` documentation comments (inline `` `code` ``, fenced blocks, headings, bold/italic emphasis, `[title](url)` links, and backslash escapes).
 -   Dedicated non-backtracking TextMate highlighting for `@expect(…)` and `@allow(…)` lint suppression attributes (`W0xxx` warning codes, `kebab-case` rule slugs, and `reason:` strings) alongside `// corex check:` (`file-expect`, `file-allow`, `expect`, `allow`) and `// corex fmt:` (`file-off`, `off`, `on`) comment directives and `-- <reason>` rationales.
+-   `CoreX: Fix All Safe Issues` (`corex.fixAll`), `CoreX: Toggle Formatter` (`corex.toggleFormat`), and one-click `Open Project Config` (`corex.toml` discovery) actions in the Command Palette and `CoreX` status-bar QuickPick menu.
+-   Backtick (`` `…` ``) selection surrounding across code, strings, and comments, plus embedded `corex-comment` Markdown emphasis/strikethrough (`*…*`, `_…_`, `~…~`) selection surrounding strictly inside `//`, `/|`, and `/#` comments and docstrings (`language-comment-configuration.json`).
 
 ### Changed
 
 -   Scoped `let` and `(x := expr)` local bindings as `variable.other.readwrite.corex` so immutable local variables render with standard variable foreground colors while `const` items retain constant styling.
--   Styled `corex lsp` function contract and stack hover footers in compact `<sub>` typography with theme-adaptive semi-transparent contrast (`#00000099` in Light themes, `#ffffffa6` in Dark themes, and full contrast in High Contrast themes), and unified the `CoreX` status-bar hover card onto ` · ` header separators and single-paragraph `<br>` service rows.
+-   Styled `corex lsp` function contract/stack hover footers, status-bar version subtitles, and faulted service rows exclusively with native VS Code CSS theme variables (`var(--vscode-descriptionForeground)`, `var(--vscode-editorError-foreground)`, and `var(--vscode-editorWarning-foreground)`, omitting color overrides in High Contrast themes).
+-   Streamlined the `CoreX` status-bar indicator (`$(check-all)` / `$(check)` / `$(circle-slash)` active-service icons with fault-only `warning`/`error` backgrounds), hover popover (inline `Restart · Stop` / `Start` and `Disable` / `Enable` service controls), and usage-ordered QuickPick menu (dynamically promoting `Troubleshooting` actions on faults), while reading `SemanticTokensLegend` dynamically from `corex lsp` capabilities (`< 25 KB` production bundle).
+-   Switched multiline string strip-margin guides to a subtle `dotted` `1px` border (`editorIndentGuide.background1`) rendered only across blocks that preserve leading spaces past closing-quote column `C`.
+-   Unified `f`, `b`, `r`, and `br` string/byte/char literal prefixes onto operator-red (`keyword.operator.prefix.string.corex`) and `'…'` character quote scopes onto `punctuation.definition.string.{begin,end}.corex`.
 
 ### Fixed
 
 -   Enabled built-in `'log'` syntax highlighting on the `CoreX` VS Code Output channel (`window.createOutputChannel('CoreX', 'log')`).
+-   Mapped plain `namespace` (`["support.module.corex", "entity.name.namespace.corex"]`) and `enumMember.attribute` (`["support.constant.lint-rule.corex", "variable.other.enummember.corex"]`) in `semanticTokenScopes` so all module names and `@expect`/`@allow` lint rule slugs retain consistent highlighting once `corex lsp` semantic tokens arrive.
+-   Removed inert string-literal escape highlighting (`\n`, `\t`, `\r`, `\0`, `\x..`, `\u{..}`) inside comments and backtick spans while highlighting CommonMark trailing `\` hard line breaks (`constant.character.escape.markdown.corex`) at the end of `/|` and `/#` docstring lines.

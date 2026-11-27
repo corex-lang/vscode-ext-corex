@@ -8,15 +8,16 @@
  */
 
 const fs = require('node:fs');
+const path = require('node:path');
 const esbuild = require('esbuild');
 
 // --------------------------------------- CONSTS ----------------------------------------
 
 /** Entry-point TypeScript module for the VS Code extension host. */
-const ENTRY_POINT = 'src/extension.ts';
+const ENTRY_POINT = './src/extension.ts';
 
 /** Bundled CommonJS output path loaded by VS Code (`package.json` `main`). */
-const OUTFILE = 'dist/extension.js';
+const OUTFILE = path.join(__dirname, 'dist', 'extension.js');
 
 /** Maximum permitted minified production bundle size (bytes; 25 KiB). */
 const MAX_PROD_BUNDLE_SIZE = 25 * 1024;
@@ -37,16 +38,23 @@ const isWatch = CLI_ARGS.has('--watch');
  */
 async function main() {
   const context = await esbuild.context({
+    absWorkingDir: __dirname,
     bundle: true,
-    entryPoints: [ENTRY_POINT],
+    charset: 'utf8',
     external: ['vscode'],
     format: 'cjs',
+    legalComments: 'none',
     logLevel: 'info',
     minify: isProduction,
     outfile: OUTFILE,
     platform: 'node',
     sourcemap: !isProduction,
     sourcesContent: false,
+    stdin: {
+      contents: `import { activate, deactivate } from '${ENTRY_POINT}';\nmodule.exports = { activate, deactivate };\n`,
+      loader: 'ts',
+      resolveDir: __dirname,
+    },
     target: 'node20',
   });
 

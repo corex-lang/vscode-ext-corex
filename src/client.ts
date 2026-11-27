@@ -8,10 +8,17 @@
  * Contains zero `vscode` runtime imports so headless `vitest` suites run directly in Node.
  */
 
-import { execFile as rawExecFile, spawn as rawSpawn } from 'node:child_process';
-import { promises as fsPromises } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { pathJoin, splitCsv } from '@/binary';
+import { execFile as cpExecFile, spawn as cpSpawn } from 'node:child_process';
+import {
+  assignProps,
+  fsAsync,
+  getHostTmpdir,
+  noop,
+  numMax,
+  numMin,
+  pathJoin,
+  splitCsv,
+} from '@/binary';
 import type {
   DecodedFrameError,
   DecodedFrameEvent,
@@ -45,8 +52,8 @@ type PendingEntry = readonly [
 /** Shared alias binding `Array.isArray` to a mangleable identifier. */
 export const { isArray } = Array;
 
-/** Shared alias binding `Object.assign` to a mangleable identifier. */
-export const assignProps = Object.assign;
+/** Local aliases binding `child_process` entry points without CJS indirect-call wrappers. */
+const [execFileProc, spawnProc] = [cpExecFile, cpSpawn];
 
 /** Shared alias binding `clearTimeout` to a mangleable identifier. */
 export const clearTimer = clearTimeout;
@@ -60,24 +67,18 @@ const allocUnsafeBuf = Buffer.allocUnsafe;
 /** Shared UTF-8 byte-length helper bound to `Buffer.byteLength`. */
 export const utf8ByteLen: (text: string) => number = Buffer.byteLength;
 
+/** Shared Node `'utf8'` buffer encoding identifier. */
+const UTF8_BUF_ENC = 'utf8';
+
 /** Shared LSP `textDocument/` method prefix. */
 export const TEXT_DOC_PREFIX = 'textDocument/';
 
 /** Default negotiated UTF-16 position encoding literal. */
 const UTF16_ENCODING = 'utf-16';
 
-/** Negotiated UTF-8 position encoding literal. */
-// oxlint-disable-next-line unicorn/text-encoding-identifier-case -- LSP 3.17 wire encoding literal
-const UTF8_ENCODING = 'utf-8';
-
-/** Local alias binding `fs.promises`. */
-const fsAsync = fsPromises;
-
-/** Local alias binding `child_process.spawn`. */
-const cpSpawn = rawSpawn;
-
-/** Local alias binding `child_process.execFile`. */
-const cpExecFile = rawExecFile;
+/** Negotiated UTF-8 position encoding literal per LSP 3.17. */
+// oxlint-disable-next-line unicorn/text-encoding-identifier-case -- LSP 3.17 PositionEncodingKind wire literal
+const UTF8_LSP_ENC = 'utf-8';
 
 /** Ordered client lifecycle state names indexed by numeric phase (`0..3`). */
 const CLIENT_STATES = splitCsv('starting,running,stopping,stopped') as readonly LspClientState[];
@@ -142,10 +143,11 @@ const LINE_SPLIT_RX = /\r?\n/;
 const HEADER_SEP_RX = /\r?\n\r?\n/;
 
 /** Matches a partial frame-header separator suffix at chunk end without backtracking. */
-const PARTIAL_SEP_RX = /\r\n\r$|\r?\n\r?$|\r$/;
+const PARTIAL_SEP_RX = /\r?\n\r?$|\r$/;
 
-/** Matches `Content-Length` HTTP header field names case-insensitively without backtracking. */
-const CONTENT_LEN_KEY_RX = /^content-length\s*$/i;
+/** Matches a trimmed `Name: Value` HTTP header line without backtracking. */
+// oxlint-disable-next-line prefer-named-capture-group -- positional groups avoid unmangleable group keys under 25 KB bundle budget
+const HEADER_FIELD_RX = /^([^:\s]+)\s*:\s*(.*)$/;
 
 // -------------------------------------- INTERNALS --------------------------------------
 
@@ -184,9 +186,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
  * @param value   Untrusted `id` property.
  */
 function isRpcId(value: unknown): value is JsonRpcId {
-  return (
-    (typeof value === 'number' && Number.isFinite(value)) || (isStr(value) && value.length <= 1024)
-  );
+  return Number.isFinite(value) || (isStr(value) && value.length <= 1024);
 }
 
 /**
@@ -214,7 +214,7 @@ function parseRpcError(rpcErr: unknown, onError?: (summary: string) => void): Js
   const err =
     isRecord(rpcErr) && typeof rpcErr.code === 'number' && isStr(rpcErr.message)
       ? createRpcError(rpcErr.message, rpcErr.code, rpcErr.data)
-      : createRpcError('RPC', JSONRPC_INTERNAL_ERROR);
+      : createRpcError('RPC', -32_603);
   if (err.code > LSP_REQUEST_CANCELED) {
     onError?.(err.message);
   }
@@ -249,6 +249,31 @@ function pushFrameError(
 }
 
 /**
+ * Updates all four `FrameDecoderState` fields in place and returns `state`.
+ *
+ * @param state                 Target decoder state object.
+ * @param rxBuffer              Backing receive buffer.
+ * @param parsedContentLength   Pending body byte length (`null` between frames).
+ * @param readOffset            Start index of unread bytes.
+ * @param writeOffset           End index of buffered bytes.
+ */
+function setDecoder(
+  state: FrameDecoderState,
+  rxBuf: Buffer,
+  parsedContentLength: number | null = null,
+  readOff = 0,
+  writeOff = 0
+): FrameDecoderState {
+  const isIdle = readOff === writeOff && parsedContentLength === null;
+  return assignProps(state, {
+    parsedContentLength,
+    readOffset: isIdle ? 0 : readOff,
+    rxBuffer: isIdle && rxBuf.length > 1_048_576 ? allocUnsafeBuf(INITIAL_RX_BUFFER_BYTES) : rxBuf,
+    writeOffset: isIdle ? 0 : writeOff,
+  });
+}
+
+/**
  * Parses an HTTP-style header block (`Content-Length` + optional `Content-Type`), returning `-1` when invalid or `-2` when oversized.
  *
  * @param headerText   `'latin1'` header block preceding the blank-line separator.
@@ -258,12 +283,12 @@ function parseContentLength(headerText: string): number {
   for (const rawLine of headerText.split(LINE_SPLIT_RX)) {
     const line = rawLine.trim();
     if (line) {
-      const colon = line.indexOf(':');
-      if (colon <= 0) {
+      const match = HEADER_FIELD_RX.exec(line);
+      if (!match) {
         return -1;
       }
-      if (CONTENT_LEN_KEY_RX.test(line.slice(0, colon))) {
-        const valText = line.slice(colon + 1).trim();
+      if ((match[1] as string).toLowerCase() === 'content-length') {
+        const valText = match[2] as string;
         const parsed = ASCII_DIGITS_RX.test(valText) ? Number(valText) : -1;
         if (parsed < 0 || (found >= 0 && found !== parsed)) {
           return -1;
@@ -286,7 +311,7 @@ function packJsonRpc(message: object): readonly [Buffer, string] {
   const jsonText = JSON.stringify(message);
   const bodyLength = utf8ByteLen(jsonText);
   if (bodyLength > MAX_LSP_CONTENT_LENGTH) {
-    throw createRpcError('Payload > 16 MiB', JSONRPC_INVALID_REQUEST);
+    throw createRpcError('Payload > 16 MiB', -32_600);
   }
   return [Buffer.from(`Content-Length: ${bodyLength}\r\n\r\n${jsonText}`), jsonText];
 }
@@ -342,12 +367,7 @@ export function isJsonRpcRequestError(error: unknown): error is JsonRpcRequestEr
 export function createFrameDecoderState(
   initialCapacity: number = INITIAL_RX_BUFFER_BYTES
 ): FrameDecoderState {
-  return {
-    parsedContentLength: null,
-    readOffset: 0,
-    rxBuffer: allocUnsafeBuf(Math.max(initialCapacity, 64)),
-    writeOffset: 0,
-  };
+  return setDecoder({} as FrameDecoderState, allocUnsafeBuf(numMax(initialCapacity, 64)));
 }
 
 /**
@@ -372,7 +392,7 @@ export function feedFrameChunk(state: FrameDecoderState, chunk: Buffer): Decoded
     readOff = 0;
   }
   if (needed > rxBuf.length) {
-    const grown = allocUnsafeBuf(Math.max(rxBuf.length * 2, needed));
+    const grown = allocUnsafeBuf(numMax(rxBuf.length * 2, needed));
     rxBuf.copy(grown, 0, 0, writeOff);
     rxBuf = grown;
   }
@@ -385,7 +405,7 @@ export function feedFrameChunk(state: FrameDecoderState, chunk: Buffer): Decoded
       const headerWindow = rxBuf.toString(
         'latin1',
         readOff,
-        Math.min(writeOff, readOff + MAX_LSP_HEADER_BYTES + 4)
+        numMin(writeOff, readOff + MAX_LSP_HEADER_BYTES + 4)
       );
       const match = HEADER_SEP_RX.exec(headerWindow);
       if (!match || match.index > MAX_LSP_HEADER_BYTES) {
@@ -417,26 +437,13 @@ export function feedFrameChunk(state: FrameDecoderState, chunk: Buffer): Decoded
         break;
       }
       const bodyEnd = readOff + bodyLen;
-      events.push({ kind: 'message', payload: rxBuf.toString('utf8', readOff, bodyEnd) });
+      events.push({ kind: 'message', payload: rxBuf.toString(UTF8_BUF_ENC, readOff, bodyEnd) });
       readOff = bodyEnd;
       bodyLen = null;
     }
   }
 
-  if (readOff === writeOff) {
-    readOff = 0;
-    writeOff = 0;
-    if (rxBuf.length > 1_048_576) {
-      rxBuf = allocUnsafeBuf(INITIAL_RX_BUFFER_BYTES);
-    }
-  }
-
-  assignProps(state, {
-    parsedContentLength: bodyLen,
-    readOffset: readOff,
-    rxBuffer: rxBuf,
-    writeOffset: writeOff,
-  });
+  setDecoder(state, rxBuf, bodyLen, readOff, writeOff);
   return events;
 }
 
@@ -455,8 +462,8 @@ export function encodeJsonRpcFrame(message: object): Buffer {
  * @param options   Binary path, workspace roots, `--internal-core` flag, and event hooks.
  */
 export async function startLspClient(options: LspClientOptions): Promise<LspClientSession> {
-  const { onProtocolError, rootUri, workspaceFolders } = options;
-  const child = cpSpawn(
+  const { onProtocolError, workspaceFolders } = options;
+  const child = spawnProc(
     options.binaryPath,
     ['lsp', '--stdio', ...(options.isInternalCore ? [INTERNAL_CORE_FLAG] : [])],
     { cwd: options.cwd, env: options.env, windowsHide: true }
@@ -464,22 +471,23 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
   const { stdin } = child;
   const decoder = createFrameDecoderState();
   const pending = new Map<JsonRpcId, PendingEntry>();
-  const stderrTail: string[] = [];
   let phase: 0 | 1 | 2 | 3 = 0;
   let isExited = false;
-  let isSuppressingExit = false;
   let nextReqId = 1;
   let stderrRem = '';
   let stopPromise: Promise<void> | undefined = undefined;
   let traceMode: TraceServerMode = options.traceMode ?? 'off';
 
-  /** Removes and cleans up timer/cancellation state for `reqId`. */
-  function takePending(reqId: JsonRpcId): PendingEntry | undefined {
+  /** Removes and cleans up timer/cancellation state for `reqId`, optionally rejecting with `err`. */
+  function takePending(reqId: JsonRpcId, err?: Error): PendingEntry | undefined {
     const entry = pending.get(reqId);
     if (entry) {
       pending.delete(reqId);
       clearTimer(entry[2]);
       entry[3]?.dispose();
+      if (err) {
+        entry[1](err);
+      }
     }
     return entry;
   }
@@ -487,7 +495,7 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
   /** Rejects all currently pending requests with `reason`. */
   function rejectAll(reason: Error): void {
     for (const [reqId] of pending) {
-      takePending(reqId)?.[1](reason);
+      takePending(reqId, reason);
     }
   }
 
@@ -497,19 +505,18 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
   }
 
   /**
-   * Resolves `true` if `child` emits `'close'` within `timeout` (ms), optionally sending `SIGKILL` first.
+   * Resolves `true` if `child` emits `'close'` within `graceMs` (or kills first and waits `250 ms`).
    *
-   * @param timeout          Maximum wait duration (ms).
-   * @param isKillingFirst   Whether to send `SIGKILL` before waiting.
+   * @param graceMs   Optional graceful wait duration (ms) before falling back to `SIGKILL`.
    */
-  function waitForClose(timeout: number, isKillingFirst?: boolean): Promise<boolean> | boolean {
-    if (isKillingFirst) {
+  function waitForClose(graceMs?: number): Promise<boolean> | boolean {
+    if (!graceMs) {
       killChild();
     }
     return (
       isExited ||
       new Promise<boolean>((resolve) => {
-        const timer = setTimer(() => resolve(false), timeout);
+        const timer = setTimer(() => resolve(false), graceMs ?? 250);
         child.once('close', () => {
           clearTimer(timer);
           resolve(true);
@@ -519,9 +526,13 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
   }
 
   /** Emits a JSON-RPC trace event when `traceMode !== 'off'`. */
-  function trace(direction: 'send' | 'receive', summary: string, jsonText: string): void {
+  function trace(isRecv: 0 | 1, summary: string, jsonText: string): void {
     if (traceMode !== 'off') {
-      options.onTrace?.(direction, summary, traceMode === 'verbose' ? jsonText : undefined);
+      options.onTrace?.(
+        isRecv ? 'receive' : 'send',
+        summary,
+        traceMode === 'verbose' ? jsonText : undefined
+      );
     }
   }
 
@@ -537,7 +548,7 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
       return false;
     }
     if (traceLabel) {
-      trace('send', traceLabel, jsonText);
+      trace(0, traceLabel, jsonText);
     }
     stdin.write(frame);
     return true;
@@ -545,14 +556,14 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
 
   /** Sends a JSON-RPC 2.0 notification frame, returning `true` when queued to `stdin`. */
   function sendNotify(method: string, params?: unknown): boolean {
-    if (phase === 1 || (phase === 2 && method === 'exit')) {
-      try {
-        return sendFrame({ method, params }, method);
-      } catch (error: unknown) {
-        onProtocolError?.(method, error);
-      }
+    try {
+      return (
+        (phase === 1 || (phase === 2 && method === 'exit')) && sendFrame({ method, params }, method)
+      );
+    } catch (error: unknown) {
+      onProtocolError?.(method, error);
+      return false;
     }
-    return false;
   }
 
   /** Sends a JSON-RPC 2.0 request frame with timeout and cancellation forwarding. */
@@ -566,17 +577,16 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
       throw createRpcError('Canceled');
     }
     if (pending.size >= MAX_PENDING_REQUESTS) {
-      throw createRpcError('Busy', LSP_REQUEST_FAILED);
+      throw createRpcError('Busy', -32_803);
     }
 
     const reqId = nextReqId;
     nextReqId += 1;
+    if (!sendFrame({ id: reqId, method, params }, `${method} (${reqId})`)) {
+      throw createRpcError('Closed');
+    }
 
     return new Promise<unknown>((resolve, reject) => {
-      if (!sendFrame({ id: reqId, method, params }, `${method} (${reqId})`)) {
-        reject(createRpcError('Closed'));
-        return;
-      }
       /** Forwards `$/cancelRequest` for `reqId`. */
       function sendCancel(): boolean {
         return sendNotify('$/cancelRequest', { id: reqId });
@@ -586,10 +596,9 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
         reject,
         setTimer(
           () => {
-            if (takePending(reqId)) {
+            if (takePending(reqId, createRpcError('Timeout', -32_802))) {
               onProtocolError?.(`Timeout: ${method}`);
               sendCancel();
-              reject(createRpcError('Timeout', LSP_SERVER_CANCELED));
             }
           },
           internalTimeout || options.requestTimeoutMs || 30_000
@@ -599,17 +608,13 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
     });
   }
 
-  /** Splits incoming UTF-8 `stderr` chunks into bounded diagnostic lines (`<= 24` retained). */
+  /** Splits incoming UTF-8 `stderr` chunks into bounded diagnostic lines. */
   function flushStderr(incomingText: string, isClosing?: boolean): void {
     const parts = (stderrRem + incomingText).split(LINE_SPLIT_RX);
     stderrRem = isClosing ? '' : (parts.pop() ?? '').slice(0, MAX_LSP_HEADER_BYTES);
     for (const rawLine of parts) {
-      const line = rawLine.slice(0, MAX_LSP_HEADER_BYTES);
-      if (line) {
-        if (stderrTail.push(line) > 24) {
-          stderrTail.shift();
-        }
-        options.onStderr?.(line);
+      if (rawLine) {
+        options.onStderr?.(rawLine.slice(0, MAX_LSP_HEADER_BYTES));
       }
     }
   }
@@ -618,7 +623,7 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
   function finishExit(
     exitCode: number | null,
     signal: NodeJS.Signals | null,
-    message: string
+    message = `Exited (${exitCode})`
   ): void {
     if (!isExited) {
       const prevPhase = phase;
@@ -626,7 +631,7 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
       phase = 3;
       stdin.destroy();
       rejectAll(new Error(message));
-      if (prevPhase > 0 && !isSuppressingExit) {
+      if (prevPhase > 0) {
         options.onExit?.(exitCode, signal, prevPhase === 1);
       }
     }
@@ -645,38 +650,37 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
       onProtocolError?.('RPC');
       return;
     }
-    if (isStr(msg.method)) {
-      trace('receive', msg.method, rawPayload);
-      const diagParams = msg.params;
+    const { error: rpcErr, id: msgId, method, params, result } = msg;
+    if (isStr(method)) {
+      trace(1, method, rawPayload);
       if (
-        msg.method === `${TEXT_DOC_PREFIX}publishDiagnostics` &&
-        hasArrayProp(diagParams, 'diagnostics') &&
-        isValidUri(diagParams.uri)
+        method === `${TEXT_DOC_PREFIX}publishDiagnostics` &&
+        hasArrayProp(params, 'diagnostics') &&
+        isValidUri(params.uri)
       ) {
         try {
-          options.onPublishDiagnostics?.(diagParams as unknown as LspPublishDiagnosticsParams);
+          options.onPublishDiagnostics?.(params as unknown as LspPublishDiagnosticsParams);
         } catch (error: unknown) {
-          onProtocolError?.(msg.method, error);
+          onProtocolError?.(method, error);
         }
-      } else if (isRpcId(msg.id)) {
-        sendFrame({ error: { code: JSONRPC_METHOD_NOT_FOUND, message: 'No method' }, id: msg.id });
+      } else if (isRpcId(msgId)) {
+        sendFrame({ error: { code: -32_601, message: 'No method' }, id: msgId });
       }
       return;
     }
-    const entry = isRpcId(msg.id) && takePending(msg.id);
+    const entry = isRpcId(msgId) && takePending(msgId);
     if (entry) {
-      trace('receive', `#${msg.id}`, rawPayload);
-      if (msg.error !== undefined) {
-        entry[1](parseRpcError(msg.error, onProtocolError));
+      trace(1, `#${msgId}`, rawPayload);
+      if (rpcErr !== undefined) {
+        entry[1](parseRpcError(rpcErr, onProtocolError));
       } else {
-        entry[0](msg.result);
+        entry[0](result);
       }
     }
   }
 
-  stdin.on('error', () => undefined);
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk: string) => flushStderr(chunk));
+  stdin.on('error', noop);
+  child.stderr.setEncoding(UTF8_BUF_ENC).on('data', flushStderr);
   child.stdout.on('data', (chunk: Buffer) => {
     for (const frameEvent of feedFrameChunk(decoder, chunk)) {
       if (frameEvent.kind === 'message') {
@@ -690,15 +694,12 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
       }
     }
   });
-  child.on('error', (spawnErr: Error) => finishExit(null, null, spawnErr.message));
-  child.on('close', (exitCode, signal) => {
-    flushStderr('', true);
-    finishExit(
-      exitCode,
-      signal,
-      `Exited (${exitCode})${stderrTail[0] ? `: ${stderrTail.join(' | ')}` : ''}`
-    );
-  });
+  child
+    .on('error', (spawnErr: Error) => finishExit(null, null, spawnErr.message))
+    .on('close', (exitCode, signal) => {
+      flushStderr('', true);
+      finishExit(exitCode, signal);
+    });
 
   /** Updates `traceMode` and notifies `$/setTrace`. */
   function applyTraceMode(value: TraceServerMode): void {
@@ -714,11 +715,9 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
       {
         capabilities: {
           general: { positionEncodings: [options.positionEncoding ?? UTF16_ENCODING] },
-          ...(options.hasPullDiagnosticsCapability && { textDocument: { diagnostic: {} } }),
         },
-        clientInfo: { name: 'corex', version: '1.0.0' },
         processId: process.pid,
-        rootUri: (rootUri === undefined ? folders?.[0]?.uri : rootUri) ?? null,
+        rootUri: options.rootUri ?? folders?.[0]?.uri ?? null,
         workspaceFolders: folders,
       },
       undefined,
@@ -737,7 +736,7 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
       initializeResult: rawInit as unknown as LspInitializeResult,
       isRunning: (): boolean => phase === 1 && !isExited,
       negotiatedEncoding:
-        rawInit.capabilities.positionEncoding === UTF8_ENCODING ? UTF8_ENCODING : UTF16_ENCODING,
+        rawInit.capabilities.positionEncoding === UTF8_LSP_ENC ? UTF8_LSP_ENC : UTF16_ENCODING,
       notify: sendNotify,
       pid: child.pid,
       request: sendReq,
@@ -747,24 +746,21 @@ export async function startLspClient(options: LspClientOptions): Promise<LspClie
           if (phase < 3) {
             phase = 2;
             rejectAll(createRpcError('Stopped'));
-            await sendReq('shutdown', null, undefined, 2000).catch(() => undefined);
+            await sendReq('shutdown', null, undefined, 2000).catch(noop);
             if (!isExited) {
               sendNotify('exit');
               stdin.end();
-              if (!(await waitForClose(500))) {
-                await waitForClose(250, true);
-              }
+              await ((await waitForClose(500)) || waitForClose());
             }
             phase = 3;
           }
         })()),
     };
   } catch (error: unknown) {
-    phase = 3;
     if (!isExited) {
-      isSuppressingExit = true;
-      await waitForClose(250, true);
+      await waitForClose();
     }
+    phase = 3;
     throw error;
   }
 }
@@ -779,6 +775,21 @@ export function stopLspClient(session: LspClientSession): Promise<void> {
 }
 
 // ---------------------- LSP 3.17 Helpers ----------------------
+
+/**
+ * Merges `extra` with `{ textDocument: { ...docFields, uri } }` for `textDocument/*` traffic.
+ *
+ * @param uri         Canonical `file://` document URI.
+ * @param extra       Optional outer request or notification fields.
+ * @param docFields   Optional inner `textDocument` fields (`version`, `languageId`, `text`).
+ */
+export function withDocUri(
+  uri: string,
+  extra?: Readonly<Record<string, unknown>>,
+  docFields?: Readonly<Record<string, unknown>>
+): Readonly<Record<string, unknown>> {
+  return { ...extra, textDocument: { ...docFields, uri } };
+}
 
 /**
  * Validates `uri` (`<= 4096` bytes) and sends a `textDocument/${subMethod}` notification, returning `true` when queued.
@@ -800,8 +811,8 @@ export function notifyTextDocument(
     session.notify(
       TEXT_DOC_PREFIX + subMethod,
       subMethod === 'didOpen' && !isRecord(docProp)
-        ? { textDocument: { ...extra, uri } }
-        : { ...extra, textDocument: { ...(isRecord(docProp) && docProp), uri } }
+        ? withDocUri(uri, undefined, extra)
+        : withDocUri(uri, extra, isRecord(docProp) ? docProp : undefined)
     )
   );
 }
@@ -827,11 +838,7 @@ export async function requestTextDocument<T>(
   if (!isValidUri(uri)) {
     throw createRpcError('URI > 4 KiB.', JSONRPC_INVALID_PARAMS);
   }
-  const res = await session.request(
-    TEXT_DOC_PREFIX + subMethod,
-    { ...extra, textDocument: { uri } },
-    token
-  );
+  const res = await session.request(TEXT_DOC_PREFIX + subMethod, withDocUri(uri, extra), token);
   return guard(res) ? res : null;
 }
 
@@ -855,37 +862,33 @@ export async function runCorexFmtCli(
     return null;
   }
 
-  const tempDir = await fsAsync.mkdtemp(pathJoin(tmpdir(), 'cx-fmt-'));
+  const tempDir = await fsAsync.mkdtemp(pathJoin(getHostTmpdir(), 'cx-fmt-'));
   const tempFile = pathJoin(tempDir, 'b.cx');
   let cancelSub: DisposableLike | undefined = undefined;
   try {
     await fsAsync.writeFile(tempFile, sourceText, { mode: 0o600 });
     const abortController = new AbortController();
     cancelSub = token?.onCancellationRequested(() => abortController.abort());
-    const isFormatted =
+    if (
       !isCanceled(token) &&
       (await new Promise<boolean>((resolve) => {
-        cpExecFile(
+        execFileProc(
           binaryPath,
-          ['fmt', '--color=never', ...(isInternalCore ? [INTERNAL_CORE_FLAG] : []), tempFile],
-          {
-            maxBuffer: MAX_LSP_CONTENT_LENGTH,
-            signal: abortController.signal,
-            timeout: 5000,
-            windowsHide: true,
-          },
+          ['fmt', ...(isInternalCore ? [INTERNAL_CORE_FLAG] : []), tempFile],
+          { signal: abortController.signal, timeout: 5000, windowsHide: true },
           (execErr) => resolve(!execErr && !isCanceled(token))
         );
-      }));
-    const fileStat = isFormatted && (await fsAsync.stat(tempFile));
-    return fileStat && fileStat.size <= MAX_LSP_CONTENT_LENGTH
-      ? await fsAsync.readFile(tempFile, 'utf8')
-      : null;
+      }))
+    ) {
+      const formatted = await fsAsync.readFile(tempFile, UTF8_BUF_ENC);
+      return utf8ByteLen(formatted) <= MAX_LSP_CONTENT_LENGTH ? formatted : null;
+    }
+    return null;
   } catch {
     return null;
   } finally {
     cancelSub?.dispose();
-    await fsAsync.rm(tempDir, { force: true, recursive: true }).catch(() => undefined);
+    await fsAsync.rm(tempDir, { force: true, recursive: true }).catch(noop);
   }
 }
 
@@ -905,7 +908,7 @@ export function computeMinimalUtf16Edit(
 
   const origLen = originalText.length;
   const fmtLen = formattedText.length;
-  const minLen = Math.min(origLen, fmtLen);
+  const minLen = numMin(origLen, fmtLen);
 
   /** Checks whether splitting at `(origIdx, fmtIdx)` tears a surrogate or `\r\n` pair. */
   function hasTornPair(origIdx: number, fmtIdx: number): boolean {

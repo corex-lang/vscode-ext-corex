@@ -3,6 +3,7 @@
 *.vsix
 !syntaxes/**
 !language-configuration.json
+!language-comment-configuration.json
 
 .agents/
 .github/

@@ -38,47 +38,35 @@ function ensureChannel(): OutputChannel {
  * @param maxLength   Maximum UTF-16 code-unit length for `detail`.
  */
 function appendLogLine(glyph: string, message: string, detail?: unknown, maxLength = 4096): void {
-  let suffix = '';
-  if (detail !== undefined && detail !== null) {
-    const text = detail instanceof Error ? (detail.stack ?? detail.message) : `${detail}`;
-    suffix = `\n${text.length <= maxLength ? text : `${text.slice(0, maxLength)}…`}`;
-  }
-  ensureChannel().appendLine(`[${new Date().toISOString()}] ${glyph} ${message}${suffix}`);
-}
-
-/**
- * Creates a logger function bound to `glyph`.
- *
- * @param glyph   Monochrome prefix symbol (`•`, `⚠`, `✗`).
- */
-function bindLogger(glyph: string): (message: string, error?: unknown) => void {
-  return (message, error) => appendLogLine(glyph, message, error);
+  const errText = detail instanceof Error ? (detail.stack ?? detail.message) : `${detail ?? ''}`;
+  const clipped = errText.length > maxLength ? `${errText.slice(0, maxLength)}…` : errText;
+  ensureChannel().appendLine(
+    `[${new Date().toISOString()}] ${glyph} ${message}${clipped && `\n${clipped}`}`
+  );
 }
 
 // ------------------------------------- PUBLIC API --------------------------------------
 
-/** Returns the `CoreX` output channel, creating it lazily on first access. */
-export function getOutputChannel(): OutputChannel {
-  return ensureChannel();
-}
+/** Returns the `CoreX` `'log'` output channel, creating it lazily on first access. */
+export const getOutputChannel = ensureChannel;
 
 /**
  * Reveals the `CoreX` output channel in the VS Code panel.
  *
  * @param isPreservingFocus   Whether editor focus should remain unchanged (`false` by default).
  */
-export function showOutputChannel(isPreservingFocus = false): void {
-  ensureChannel().show(isPreservingFocus);
+export function showOutputChannel(isPreservingFocus?: boolean): void {
+  ensureChannel().show(Boolean(isPreservingFocus));
 }
 
-/** Appends an informational lifecycle message to the `CoreX` output channel. */
-export const logInfo = bindLogger('•');
-
-/** Appends a non-fatal warning message to the `CoreX` output channel. */
-export const logWarn = bindLogger('⚠');
-
-/** Appends an error message to the `CoreX` output channel. */
-export const logError = bindLogger('✗');
+/** Appends informational, warning, and error lifecycle messages to the `CoreX` output channel. */
+export const [logInfo, logWarn, logError] = ([...'•⚠✗'] as [string, string, string]).map(
+  (glyph) => (message: string, error?: unknown) => appendLogLine(glyph, message, error)
+) as [
+  (message: string, error?: unknown) => void,
+  (message: string, error?: unknown) => void,
+  (message: string, error?: unknown) => void,
+];
 
 /**
  * Appends a JSON-RPC 2.0 traffic trace entry to the `CoreX` output channel.

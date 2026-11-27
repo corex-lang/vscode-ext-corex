@@ -49,13 +49,25 @@
           "dark": "./assets/icon.png",
           "light": "./assets/icon.png"
         }
+      },
+      {
+        "id": "corex-comment",
+        "aliases": [],
+        "configuration": "./language-comment-configuration.json"
       }
     ],
     "grammars": [
       {
         "language": "corex",
         "scopeName": "source.corex",
-        "path": "./syntaxes/corex.tmLanguage.json"
+        "path": "./syntaxes/corex.tmLanguage.json",
+        "embeddedLanguages": {
+          "comment.line.double-slash.corex": "corex-comment",
+          "comment.line.double-slash.rationale.corex": "corex-comment",
+          "comment.line.documentation.corex": "corex-comment",
+          "comment.line.documentation.module.corex": "corex-comment",
+          "markup.raw.block.markdown.corex": "corex"
+        }
       },
       {
         "scopeName": "markdown.corex.codeblock",
@@ -100,6 +112,10 @@
             "storage.type.annotation.corex",
             "punctuation.definition.annotation.corex"
           ],
+          "enumMember.attribute": [
+            "support.constant.lint-rule.corex",
+            "constant.other.lint-code.corex"
+          ],
           "keyword.async": ["keyword.control.async.corex", "keyword.control.corex"],
           "keyword.unsafe": ["storage.modifier.unsafe.corex", "keyword.other.unsafe.corex"],
           "macro.attribute": [
@@ -114,6 +130,10 @@
           "modifier.mutable": [
             "storage.modifier.mutability.corex",
             "storage.modifier.corex"
+          ],
+          "namespace": [
+            "support.module.corex",
+            "entity.name.namespace.corex"
           ],
           "namespace.defaultLibrary": [
             "support.module.corex",
@@ -133,6 +153,11 @@
     ],
     "commands": [
       {
+        "command": "corex.fixAll",
+        "category": "CoreX",
+        "title": "Fix All Safe Issues"
+      },
+      {
         "command": "corex.restartServer",
         "category": "CoreX",
         "title": "Restart Language Server"
@@ -151,6 +176,11 @@
         "command": "corex.stopServer",
         "category": "CoreX",
         "title": "Stop Language Server"
+      },
+      {
+        "command": "corex.toggleFormat",
+        "category": "CoreX",
+        "title": "Toggle Formatter"
       },
       {
         "command": "corex.toggleInlayHints",

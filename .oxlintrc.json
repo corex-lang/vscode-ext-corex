@@ -15,6 +15,7 @@
     "dist/**",
     "syntaxes/**",
     "language-configuration.json",
+    "language-comment-configuration.json",
     "*.md",
     "package.json"
   ],

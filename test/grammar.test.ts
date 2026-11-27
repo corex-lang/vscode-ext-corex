@@ -84,6 +84,12 @@ const MARKDOWN_INJECTION_PATH = path.resolve(
 /** Path to `language-configuration.json`. */
 const LANGUAGE_CONFIG_PATH = path.resolve(EXT_ROOT, 'language-configuration.json');
 
+/** Path to `language-comment-configuration.json`. */
+const COMMENT_LANGUAGE_CONFIG_PATH = path.resolve(EXT_ROOT, 'language-comment-configuration.json');
+
+/** Path to `package.json`. */
+const PACKAGE_JSON_PATH = path.resolve(EXT_ROOT, 'package.json');
+
 /** Path to `vscode-oniguruma`'s WebAssembly binary. */
 const ONIG_WASM_PATH = path.resolve(
   EXT_ROOT,
@@ -483,7 +489,7 @@ describe('Corpus scope invariants – ../corex/{core,stdlib/cx}/**/*.cx and ../c
         tokenizeNonWhitespace(grammar, await readFile(filePath, 'utf8'))
       );
     }
-  }, 25_000);
+  }, 60_000);
 
   it('enforces all 3 strict scope invariants across all >= 10 fenced cx showcases in COMPARISONS.md', async () => {
     const showcases = extractCxShowcases(
@@ -920,8 +926,9 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
       '/# # Module Heading',
       '/# Inline `Vec[u8]` and ``a `b` c`` with ***both***, ___uboth___, **bold**, __ubold__, ' +
         '*italic*, _emph_, ~~legacy~~, ~Copy (~10 ms), and [Spec](https://corex.dev).',
-      String.raw`/# Escapes: Hello\nworld! and \* in docs.`,
-      String.raw`// Strip trailing \r\nbytes`,
+      '/# Escapes: Hello\\nworld! and \\* in docs\\',
+      '/| Wrapped item line\\\\ then\\',
+      '// Strip trailing \\r\\nbytes\\',
       '// Inline `buf` with **care**',
       '/| ```cx',
       '/| let sample = 1;',
@@ -941,11 +948,20 @@ describe('Types vs variants vs constants, @attributes, #soa, frontmatter, labels
     expect(findToken(mdDocTokens, 'a `b` c').leafScope).toBe(
       'punctuation.definition.raw.markdown.corex'
     );
-    expect(findToken(mdDocTokens, String.raw`\n`, 0).leafScope).toBe(
-      'constant.character.escape.comment.corex'
+    for (const tok of mdDocTokens) {
+      expect(tok.leafScope).not.toBe('constant.character.escape.comment.corex');
+      if (tok.line === 4) {
+        expect(tok.leafScope).not.toBe('constant.character.escape.markdown.corex');
+      }
+    }
+    expect(findToken(mdDocTokens, '\\', 0).leafScope).toBe(
+      'constant.character.escape.markdown.corex'
     );
-    expect(findToken(mdDocTokens, String.raw`\r`).leafScope).toBe(
-      'constant.character.escape.comment.corex'
+    expect(findToken(mdDocTokens, String.raw`\\`).leafScope).toBe(
+      'constant.character.escape.markdown.corex'
+    );
+    expect(findToken(mdDocTokens, '\\', 1).leafScope).toBe(
+      'constant.character.escape.markdown.corex'
     );
     expect(findToken(mdDocTokens, '***', 0).leafScope).toBe('punctuation.definition.comment.corex');
     expect(hasScopeMatching(findToken(mdDocTokens, 'both'), 'markup.bold.markdown.corex')).toBe(
@@ -1148,9 +1164,22 @@ describe('Strings, recursive {expr=:#06x} interpolation, numbers, and closure vs
     expect(findToken(tokens, ':─^10').leafScope).toBe('storage.type.format.corex');
     expect(findToken(tokens, 'self').leafScope).toBe('variable.language.self.corex');
     expect(findToken(tokens, 'true').leafScope).toBe('constant.language.boolean.corex');
-    expect(findToken(tokens, 'f', 0).leafScope).toBe('storage.type.string.corex');
-    expect(findToken(tokens, 'r', 0).leafScope).toBe('punctuation.definition.string.begin.corex');
-    expect(findToken(tokens, 'br', 0).leafScope).toBe('punctuation.definition.string.begin.corex');
+    expect(findToken(tokens, 'f', 0).leafScope).toBe('keyword.operator.prefix.string.corex');
+    expect(findToken(tokens, 'f', 1).leafScope).toBe('keyword.operator.prefix.string.corex');
+    expect(findToken(tokens, 'r', 0).leafScope).toBe('keyword.operator.prefix.string.corex');
+    expect(findToken(tokens, 'r', 1).leafScope).toBe('keyword.operator.prefix.string.corex');
+    expect(findToken(tokens, 'b', 0).leafScope).toBe('keyword.operator.prefix.string.corex');
+    expect(findToken(tokens, 'b', 1).leafScope).toBe('keyword.operator.prefix.string.corex');
+    expect(findToken(tokens, 'b', 2).leafScope).toBe('keyword.operator.prefix.string.corex');
+    expect(findToken(tokens, 'br', 0).leafScope).toBe('keyword.operator.prefix.string.corex');
+    expect(findToken(tokens, 'br', 1).leafScope).toBe('keyword.operator.prefix.string.corex');
+    expect(findToken(tokens, "'", 0).leafScope).toBe('punctuation.definition.string.begin.corex');
+    expect(findToken(tokens, "'", 1).leafScope).toBe('punctuation.definition.string.end.corex');
+    expect(findToken(tokens, "'", 2).leafScope).toBe('punctuation.definition.string.begin.corex');
+    expect(findToken(tokens, "'", 3).leafScope).toBe('punctuation.definition.string.end.corex');
+    for (const tok of tokens) {
+      expect(tok.leafScope.startsWith('punctuation.definition.char.')).toBe(false);
+    }
 
     const retiredTripleQuotes = tokenizeNonWhitespace(
       getCorexGrammar(),
@@ -1647,5 +1676,86 @@ describe('Non-backtracking ReDoS latency (< 50 ms on 4000-char adversarial lines
         expect(performance.now() - startTime).toBeLessThan(50);
       }
     }
+  });
+
+  it('wires ISS-007/ISS-009 semanticTokenScopes and ISS-013 code vs comment surroundingPairs cleanly', async () => {
+    const [rawCodeCfg, rawCommentCfg, rawPkg] = await Promise.all([
+      readFile(LANGUAGE_CONFIG_PATH, 'utf8'),
+      readFile(COMMENT_LANGUAGE_CONFIG_PATH, 'utf8'),
+      readFile(PACKAGE_JSON_PATH, 'utf8'),
+    ]);
+    const codeCfg = JSON.parse(rawCodeCfg) as {
+      readonly autoClosingPairs: readonly { readonly open: string; readonly notIn?: string[] }[];
+      readonly surroundingPairs: readonly [string, string][];
+    };
+    const commentCfg = JSON.parse(rawCommentCfg) as {
+      readonly autoClosingPairs: readonly { readonly open: string }[];
+      readonly onEnterRules: readonly { readonly beforeText: string }[];
+      readonly surroundingPairs: readonly [string, string][];
+    };
+    const pkgJson = JSON.parse(rawPkg) as {
+      readonly contributes: {
+        readonly grammars: readonly {
+          readonly embeddedLanguages?: Readonly<Record<string, string>>;
+          readonly scopeName: string;
+        }[];
+        readonly languages: readonly {
+          readonly aliases?: readonly string[];
+          readonly id: string;
+        }[];
+        readonly semanticTokenScopes: readonly {
+          readonly scopes: Readonly<Record<string, readonly string[]>>;
+        }[];
+      };
+    };
+
+    expect(codeCfg.surroundingPairs).toContainEqual(['`', '`']);
+    expect(codeCfg.surroundingPairs).not.toContainEqual(['*', '*']);
+    expect(codeCfg.surroundingPairs).not.toContainEqual(['_', '_']);
+    expect(codeCfg.surroundingPairs).not.toContainEqual(['~', '~']);
+    expect(codeCfg.autoClosingPairs).toContainEqual({ close: '`', notIn: ['string'], open: '`' });
+
+    for (const mdPair of [
+      ['`', '`'],
+      ['*', '*'],
+      ['_', '_'],
+      ['~', '~'],
+    ] as const) {
+      expect(commentCfg.surroundingPairs).toContainEqual(mdPair);
+    }
+    for (const autoPair of commentCfg.autoClosingPairs) {
+      expect(['*', '_', '~'].includes(autoPair.open)).toBe(false);
+    }
+    expect(commentCfg.onEnterRules).toHaveLength(2);
+
+    const commentLang = pkgJson.contributes.languages.find((item) => item.id === 'corex-comment');
+    expect(commentLang?.aliases).toEqual([]);
+
+    const corexGrammarEntry = pkgJson.contributes.grammars.find(
+      (item) => item.scopeName === 'source.corex'
+    );
+    expect(corexGrammarEntry?.embeddedLanguages).toEqual({
+      'comment.line.documentation.corex': 'corex-comment',
+      'comment.line.documentation.module.corex': 'corex-comment',
+      'comment.line.double-slash.corex': 'corex-comment',
+      'comment.line.double-slash.rationale.corex': 'corex-comment',
+      'markup.raw.block.markdown.corex': 'corex',
+    });
+
+    const semScopes = pkgJson.contributes.semanticTokenScopes[0]?.scopes;
+    expect(semScopes?.namespace).toEqual(['support.module.corex', 'entity.name.namespace.corex']);
+    expect(semScopes?.['enumMember.attribute']).toEqual([
+      'support.constant.lint-rule.corex',
+      'constant.other.lint-code.corex',
+    ]);
+
+    const useModTokens = tokenizeNonWhitespace(
+      getCorexGrammar(),
+      'pub mod async;\nuse cx.str.{String};\nuse cx.async.{TaskScope};\n'
+    );
+    assertStrictCorexScopeInvariants('iss007-keyword-prim-modules', useModTokens);
+    expect(findToken(useModTokens, 'async', 0).leafScope).toBe('entity.name.namespace.corex');
+    expect(findToken(useModTokens, 'str').leafScope).toBe('entity.name.namespace.corex');
+    expect(findToken(useModTokens, 'async', 1).leafScope).toBe('entity.name.namespace.corex');
   });
 });

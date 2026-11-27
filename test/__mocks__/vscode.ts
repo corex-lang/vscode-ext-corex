@@ -841,6 +841,9 @@ let nextDecorationId = 1;
 /** Optional scripted button choice returned by the next `showErrorMessage` / `showWarningMessage` / `showQuickPick`. */
 let nextDialogChoiceState: string | undefined = undefined;
 
+/** Recorded `commands.executeCommand` invocations. */
+const executedCommandsState: { readonly args: readonly unknown[]; readonly command: string }[] = [];
+
 /** Active language feature providers registered via `vscode.languages`. */
 const providerRegistryState: MockProviderRegistry = {
   codeActions: [],
@@ -1305,6 +1308,34 @@ function registerProviderInBucket(bucket: unknown[], provider: unknown): MockDis
 const documentBuffers = new WeakMap<MockTextDocument, string>();
 
 /**
+ * Mutates `document`'s text, increments `document.version`, and fires `onDidChangeTextDocument`.
+ *
+ * @param document      Open mock document to update.
+ * @param nextText      Replacement text (full buffer when `changeRange` is omitted).
+ * @param changeRange   Optional replaced span corresponding to `nextText`.
+ */
+export function changeMockDocument(
+  document: MockTextDocument,
+  nextText: string,
+  changeRange?: MockRange
+): void {
+  const prevLines = document.getText().split(DOC_LINE_SPLIT_RX);
+  const lastLineIdx = Math.max(0, prevLines.length - 1);
+  const fullSpan = createRange(
+    createPosition(0, 0),
+    createPosition(lastLineIdx, (prevLines[lastLineIdx] ?? '').length)
+  );
+  documentBuffers.set(document, nextText);
+  document.version += 1;
+  document.lineCount = nextText.split(DOC_LINE_SPLIT_RX).length;
+  document.eol = nextText.includes('\r\n') ? EndOfLine.CRLF : EndOfLine.LF;
+  changeDocEmitter.fire({
+    contentChanges: [{ range: changeRange ?? fullSpan, text: nextText }],
+    document,
+  });
+}
+
+/**
  * Mutates `configValuesState` and optionally broadcasts `onDidChangeConfiguration`.
  *
  * @param values          Map of full keys (`'corex.enable'`) or short keys (`'enable'`) to values.
@@ -1447,6 +1478,37 @@ export const EventEmitter: EventEmitterConstructor =
 
 /** Mock `vscode.workspace` namespace. */
 export const workspace = {
+  applyEdit(edit: MockWorkspaceEdit): Promise<boolean> {
+    for (const [targetUri, edits] of edit.entries()) {
+      for (const doc of openDocumentsState) {
+        if (doc.uri.toString() === targetUri.toString()) {
+          const lines = doc.getText().split('\n');
+          const lineOffsets: number[] = [];
+          let runningOffset = 0;
+          for (const lineText of lines) {
+            lineOffsets.push(runningOffset);
+            runningOffset += lineText.length + 1;
+          }
+          const sortedEdits = edits.toSorted(
+            (left, right) =>
+              right.range.start.line - left.range.start.line ||
+              right.range.start.character - left.range.start.character
+          );
+          let updated = doc.getText();
+          for (const item of sortedEdits) {
+            if (item.eol === undefined) {
+              const startOff =
+                (lineOffsets[item.range.start.line] ?? 0) + item.range.start.character;
+              const endOff = (lineOffsets[item.range.end.line] ?? 0) + item.range.end.character;
+              updated = updated.slice(0, startOff) + item.newText + updated.slice(endOff);
+            }
+          }
+          changeMockDocument(doc, updated);
+        }
+      }
+    }
+    return Promise.resolve(true);
+  },
   asRelativePath(pathOrUri: string | MockUri, isIncludingWorkspaceFolder?: boolean): string {
     const rawFsPath = typeof pathOrUri === 'string' ? pathOrUri : pathOrUri.fsPath;
     const resolvedTarget = path.resolve(rawFsPath);
@@ -1761,6 +1823,7 @@ export const languages = {
 /** Mock `vscode.commands` namespace. */
 export const commands = {
   async executeCommand(commandId: string, ...args: unknown[]): Promise<unknown> {
+    executedCommandsState.push({ args, command: commandId });
     const handler = commandHandlersState.get(commandId);
     return handler ? await handler(...args) : undefined;
   },
@@ -1785,6 +1848,7 @@ export function resetVscodeMock(): void {
   openDocumentsState.length = 0;
   configValuesState.clear();
   commandHandlersState.clear();
+  executedCommandsState.length = 0;
   outputChannelsState.length = 0;
   statusBarItemsState.length = 0;
   diagnosticCollectionsState.length = 0;
@@ -1907,34 +1971,6 @@ export function openMockDocument(options: OpenMockDocumentOptions): MockTextDocu
   openDocumentsState.push(document);
   openDocEmitter.fire(document);
   return document;
-}
-
-/**
- * Mutates `document`'s text, increments `document.version`, and fires `onDidChangeTextDocument`.
- *
- * @param document      Open mock document to update.
- * @param nextText      Replacement text (full buffer when `changeRange` is omitted).
- * @param changeRange   Optional replaced span corresponding to `nextText`.
- */
-export function changeMockDocument(
-  document: MockTextDocument,
-  nextText: string,
-  changeRange?: MockRange
-): void {
-  const prevLines = document.getText().split(DOC_LINE_SPLIT_RX);
-  const lastLineIdx = Math.max(0, prevLines.length - 1);
-  const fullSpan = createRange(
-    createPosition(0, 0),
-    createPosition(lastLineIdx, (prevLines[lastLineIdx] ?? '').length)
-  );
-  documentBuffers.set(document, nextText);
-  document.version += 1;
-  document.lineCount = nextText.split(DOC_LINE_SPLIT_RX).length;
-  document.eol = nextText.includes('\r\n') ? EndOfLine.CRLF : EndOfLine.LF;
-  changeDocEmitter.fire({
-    contentChanges: [{ range: changeRange ?? fullSpan, text: nextText }],
-    document,
-  });
 }
 
 /**
@@ -2063,6 +2099,7 @@ export function getMockState() {
     decorationTypes: decorationTypesState,
     editors: visibleEditorsState,
     errorMessages: errorMessagesState,
+    executedCommands: executedCommandsState,
     outputChannels: outputChannelsState,
     providers: providerRegistryState,
     quickPicks: quickPicksState,
